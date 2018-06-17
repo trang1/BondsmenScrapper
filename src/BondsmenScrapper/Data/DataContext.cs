@@ -7,7 +7,7 @@ using MySql.Data.Entity;
 namespace BondsmenScrapper.Data
 {
     // Code-Based Configuration and Dependency resolution
-    [DbConfigurationType(typeof(MySqlEFConfiguration))]
+    //[DbConfigurationType(typeof(MySqlEFConfiguration))]
     public partial class DataContext : DbContext
     {
         public DbSet<Acitvity> Activities { get; set; }
@@ -33,13 +33,13 @@ namespace BondsmenScrapper.Data
         protected override void OnModelCreating(DbModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
-            modelBuilder.Entity<Acitvity>().MapToStoredProcedures();
-            modelBuilder.Entity<Bond>().MapToStoredProcedures();
-            modelBuilder.Entity<Booking>().MapToStoredProcedures();
-            modelBuilder.Entity<CaseSummary>().MapToStoredProcedures();
-            modelBuilder.Entity<CriminalHistory>().MapToStoredProcedures();
-            modelBuilder.Entity<Hold>().MapToStoredProcedures();
-            modelBuilder.Entity<Setting>().MapToStoredProcedures();
+            //modelBuilder.Entity<Acitvity>().MapToStoredProcedures();
+            //modelBuilder.Entity<Bond>().MapToStoredProcedures();
+            //modelBuilder.Entity<Booking>().MapToStoredProcedures();
+            //modelBuilder.Entity<CaseSummary>().MapToStoredProcedures();
+            //modelBuilder.Entity<CriminalHistory>().MapToStoredProcedures();
+            //modelBuilder.Entity<Hold>().MapToStoredProcedures();
+            //modelBuilder.Entity<Setting>().MapToStoredProcedures();
         }
     }
     /*
@@ -75,10 +75,10 @@ Case_GUID VARCHAR(32),
 )*/
     public partial class CaseSummary
     {
+        public int Id { get; set; }
         public string CaseNumber { get; set; }
         public string CaseStatus { get; set; }
         public DateTime FileDate { get; set; }
-        public string Status { get; set; }
         public string Offense { get; set; }
         public string LastInstrumentFiled { get; set; }
         public string Disposition { get; set; }
@@ -117,7 +117,8 @@ Case_GUID VARCHAR(32),
 )*/
     public partial class Bond
     {
-        public string CaseGuid { get; set; }
+        public int Id { get; set; }
+        public int CaseId { get; set; }
         public DateTime Date { get; set; }
         public string Type { get; set; }
         public string Description { get; set; }
@@ -133,7 +134,8 @@ Case_GUID VARCHAR(32),
 )*/
     public partial class Acitvity
     {
-        public string CaseGuid { get; set; }
+        public int Id { get; set; }
+        public int CaseId { get; set; }
         public DateTime Date { get; set; }
         public string Type { get; set; }
         public string Description { get; set; }
@@ -151,7 +153,8 @@ Case_GUID VARCHAR(32),
 )*/
     public partial class Booking
     {
-        public string CaseGuid { get; set; }
+        public int Id { get; set; }
+        public int CaseId { get; set; }
         public DateTime? ArrestDate { get; set; }
         public string ArrestLocation { get; set; }
         public DateTime? BookingDate { get; set; }
@@ -172,7 +175,8 @@ Case_GUID VARCHAR(32),
 )*/
     public partial class Hold
     {
-        public string CaseGuid { get; set; }
+        public int Id { get; set; }
+        public int CaseId { get; set; }
         public string AgencyPlacingHold { get; set; }
         public string AgencyName { get; set; }
         public string WarrantNumber { get; set; }
@@ -201,7 +205,8 @@ Case_GUID VARCHAR(32),
 
     public partial class CriminalHistory
     {
-        public string CaseGuid { get; set; }
+        public int Id { get; set; }
+        public int CaseId { get; set; }
         public string CaseNumStatus { get; set; }
         public string Defendant { get; set; }
         public string DateFiledBooked { get; set; }
@@ -232,7 +237,8 @@ Case_GUID VARCHAR(32),
 
     public partial class Setting
     {
-        public string CaseGuid { get; set; }
+        public int Id { get; set; }
+        public int CaseId { get; set; }
         public DateTime? Date { get; set; }
         public string Court { get; set; }
         public string PostJdgm { get; set; }
