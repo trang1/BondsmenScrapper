@@ -13,7 +13,9 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using BondsmenScrapper.Data;
 using HtmlAgilityPack;
+using MySql.Data.MySqlClient;
 using HtmlDocument = HtmlAgilityPack.HtmlDocument;
 
 namespace BondsmenScrapper
@@ -177,138 +179,245 @@ namespace BondsmenScrapper
                 var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
                 var cause = caseRow.ChildNodes[3].InnerText.Trim() + ", " + caseRow.ChildNodes[5].InnerText.Trim();
 
-                // *********************    CASE DETAILS **************************
-                var caseDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCaseDetails']");
 
-                if (caseDetailsTable != null)
-                {
-                    var fileDate = caseDetailsTable.ChildNodes[3].ChildNodes[3].InnerText;
-                    var status = caseDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
-                    var offense = caseDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
-                    var lastInstr = caseDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
-                    var disposition = caseDetailsTable.ChildNodes[19].ChildNodes[3].InnerText;
-                    var complDate = caseDetailsTable.ChildNodes[23].ChildNodes[3].InnerText;
-                    var defStatus = caseDetailsTable.ChildNodes[27].ChildNodes[3].InnerText;
-                    var bondAmt = caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText;
-                    var settDate = caseDetailsTable.ChildNodes[35].ChildNodes[3].InnerText;
-                }
+                var connectionString = ConfigurationManager.ConnectionStrings["DbContext"].ConnectionString;
 
-                // *********************** DEFENDANT DETAILS  *************************
-                var defDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblDefendantDetails']");
-                if (defDetailsTable != null)
+                using (var connection = new MySqlConnection(connectionString))
                 {
-                    var raceSex = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1].ChildNodes[1].ChildNodes[3].InnerText;
-                    var eyes = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1].ChildNodes[5].ChildNodes[3].InnerText;
-                    var skin = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1].ChildNodes[9].ChildNodes[3].InnerText;
-                    var dob = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1].ChildNodes[13].ChildNodes[3].InnerText;
-                    var usCitizen = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1].ChildNodes[17].ChildNodes[3].InnerText;
-                    var hWeight = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1].ChildNodes[1].ChildNodes[3].InnerText;
-                    var hair = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1].ChildNodes[5].ChildNodes[3].InnerText;
-                    var build = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1].ChildNodes[9].ChildNodes[3].InnerText;
-                    var inCustody = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1].ChildNodes[13].ChildNodes[3].InnerText;
-                    var plOB = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1].ChildNodes[17].ChildNodes[3].InnerText;
-                    var address = defDetailsTable.ChildNodes[5].ChildNodes[3].InnerText;
-                    var markings = defDetailsTable.ChildNodes[9].ChildNodes[3].InnerText;
-                }
+                    connection.Open();
+                    var transaction = connection.BeginTransaction();
 
-                // ****************************  CURRENT PRESIDING JUDGE ***********************
-                var courtDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCourtDetails']");
-                if (courtDetailsTable != null)
-                {
-                    var court = courtDetailsTable.ChildNodes[3].ChildNodes[3].InnerText;
-                    var address = courtDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
-                    var judgeName = courtDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
-                    var courtType = courtDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
-                }
-
-                // ***********************************   BONDS  ***********************************
-                var bondsRows = htmlDoc.DocumentNode.SelectNodes("//table[@id='tblBonds']/tr[@style='font-size:12px; ']");
-                if (bondsRows != null)
-                {
-                    foreach (var bondsRow in bondsRows)
+                    try
                     {
-                        var date = bondsRow.ChildNodes[1].InnerText;
-                        var type = bondsRow.ChildNodes[3].InnerText;
-                        var desc = bondsRow.ChildNodes[5].InnerText;
-                        var snu = bondsRow.ChildNodes[7].InnerText;
+                        // DbConnection that is already opened
+                        using (var context = new DataContext(connection, false))
+                        {
+
+                            // Interception/SQL logging
+                            context.Database.Log = Console.WriteLine;
+
+                            // Passing an existing transaction to the context
+                            context.Database.UseTransaction(transaction);
+
+
+                            // *********************    CASE DETAILS **************************
+                            var caseDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCaseDetails']");
+
+                            // No case - returning
+                            if (caseDetailsTable == null) return;
+
+                            var caseSummary = new CaseSummary();
+
+                            caseSummary.FileDate = DateTime.Parse(caseDetailsTable.ChildNodes[3].ChildNodes[3].InnerText);
+                            caseSummary.Status = caseDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
+                            caseSummary.Offense = caseDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
+                            caseSummary.LastInstrumentFiled = caseDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
+                            caseSummary.Disposition = caseDetailsTable.ChildNodes[19].ChildNodes[3].InnerText;
+                            caseSummary.CompletionDate = caseDetailsTable.ChildNodes[23].ChildNodes[3].InnerText.ToDateTimeNullable();
+                            caseSummary.DefendantStatus = caseDetailsTable.ChildNodes[27].ChildNodes[3].InnerText;
+                            caseSummary.BondAmount = caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText.ToDecimalNullable();
+                            caseSummary.SettingDate = caseDetailsTable.ChildNodes[35].ChildNodes[3].InnerText.ToDateTimeNullable();
+                            caseSummary.CaseGuid = Guid.NewGuid().ToString();
+
+                            // *********************** DEFENDANT DETAILS  *************************
+                            var defDetailsTable =
+                                htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblDefendantDetails']");
+                            if (defDetailsTable != null)
+                            {
+                                var defTablePart1 = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1];
+                                caseSummary.DefendantRaceSex =
+                                    defTablePart1.ChildNodes[1].ChildNodes[3].InnerText;
+                                caseSummary.DefendantEyes =
+                                    defTablePart1.ChildNodes[5].ChildNodes[3].InnerText;
+                                caseSummary.DefendantSkin =
+                                    defTablePart1.ChildNodes[9].ChildNodes[3].InnerText;
+                                caseSummary.DefendantDob =
+                                    defTablePart1.ChildNodes[13].ChildNodes[3].InnerText.ToDateTimeNullable();
+                                caseSummary.DefendantUsCitizen =
+                                    defTablePart1.ChildNodes[17].ChildNodes[3].InnerText;
+
+                                var defTablePart2 = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1];
+                                caseSummary.DefendantHeightWeight =
+                                    defTablePart2.ChildNodes[1].ChildNodes[3].InnerText;
+                                caseSummary.DefendantHair =
+                                    defTablePart2.ChildNodes[5].ChildNodes[3].InnerText;
+                                caseSummary.DefendantBuild =
+                                    defTablePart2.ChildNodes[9].ChildNodes[3].InnerText;
+                                caseSummary.DefendantInCustody =
+                                    defTablePart2.ChildNodes[13].ChildNodes[3].InnerText;
+                                caseSummary.DefendantPlaceOfBirth =
+                                    defTablePart2.ChildNodes[17].ChildNodes[3].InnerText;
+
+                                caseSummary.DefendantAddress = defDetailsTable.ChildNodes[5].ChildNodes[3].InnerText;
+                                caseSummary.DefendantMarkings = defDetailsTable.ChildNodes[9].ChildNodes[3].InnerText;
+                            }
+
+                            // ****************************  CURRENT PRESIDING JUDGE ***********************
+                            var courtDetailsTable =
+                                htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCourtDetails']");
+                            if (courtDetailsTable != null)
+                            {
+                                caseSummary.CpjCurrentCourt = courtDetailsTable.ChildNodes[3].ChildNodes[3].InnerText;
+                                caseSummary.CpjAddress = courtDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
+                                caseSummary.CpjJudgeName = courtDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
+                                caseSummary.CpjCourtType = courtDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
+                            }
+
+                            // ***********************************   BONDS  ***********************************
+                            var bondsRows = htmlDoc.DocumentNode.SelectNodes
+                                ("//table[@id='tblBonds']/tr[@style='font-size:12px; ']");
+
+                            var bonds = new List<Bond>();
+                            if (bondsRows != null)
+                            {
+                                foreach (var bondsRow in bondsRows)
+                                {
+                                    var bond = new Bond();
+
+                                    bond.Date = DateTime.Parse(bondsRow.ChildNodes[1].InnerText);
+                                    bond.Type = bondsRow.ChildNodes[3].InnerText;
+                                    bond.Description = bondsRow.ChildNodes[5].InnerText;
+                                    bond.Snu = bondsRow.ChildNodes[7].InnerText;
+                                    bond.CaseGuid = caseSummary.CaseGuid;
+
+                                    bonds.Add(bond);
+                                }
+                            }
+
+                            // ***********************************   ACTIVITIES  ***********************************
+                            var activitiesRows = htmlDoc.DocumentNode.SelectNodes(
+                                    "//table[@id='tblActivities']/tr[@style='font-size:12px; ']");
+
+                            var activities = new List<Acitvity>();
+                            if (activitiesRows != null)
+                            {
+                                foreach (var activitiesRow in activitiesRows)
+                                {
+                                    var activity = new Acitvity();
+
+                                    activity.Date = DateTime.Parse(activitiesRow.ChildNodes[1].InnerText);
+                                    activity.Type = activitiesRow.ChildNodes[3].InnerText;
+                                    activity.Description = activitiesRow.ChildNodes[5].InnerText;
+                                    activity.Snu = activitiesRow.ChildNodes[7].InnerText;
+                                    activity.CaseGuid = caseSummary.CaseGuid;
+
+                                    activities.Add(activity);
+                                }
+                            }
+
+                            // ***********************************   BOOKINGS  ***********************************
+                            var bookingsRows = htmlDoc.DocumentNode.SelectNodes(
+                                    "//table[@id='tblBookings']/tr[@style='font-size:12px; ']");
+                            var bookings = new List<Booking>();
+                            if (bookingsRows != null)
+                            {
+                                foreach (var bookingsRow in bookingsRows)
+                                {
+                                    var booking = new Booking();
+
+                                    booking.ArrestDate = bookingsRow.ChildNodes[1].InnerText.ToDateTimeNullable();
+                                    booking.ArrestLocation = bookingsRow.ChildNodes[3].InnerText;
+                                    booking.BookingDate = bookingsRow.ChildNodes[5].InnerText.ToDateTimeNullable();
+                                    booking.CaseGuid = caseSummary.CaseGuid;
+
+                                    bookings.Add(booking);
+                                }
+                            }
+
+                            // ***********************************   HOLDS  ***********************************
+                            var holdsRows =
+                                htmlDoc.DocumentNode.SelectNodes("//table[@id='tblHolds']/tr[@style='font-size:12px; ']");
+
+                            var holds = new List<Hold>();
+                            if (holdsRows != null)
+                            {
+                                foreach (var holdsRow in holdsRows)
+                                {
+                                    var hold = new Hold();
+
+                                    hold.AgencyPlacingHold = holdsRow.ChildNodes[1].InnerText;
+                                    hold.AgencyName = holdsRow.ChildNodes[3].InnerText;
+                                    hold.WarrantNumber = holdsRow.ChildNodes[5].InnerText;
+                                    hold.BondAmount = holdsRow.ChildNodes[7].InnerText.ToDecimalNullable();
+                                    hold.Offense = holdsRow.ChildNodes[9].InnerText;
+                                    hold.PlacedDate = holdsRow.ChildNodes[11].InnerText.ToDateTimeNullable();
+                                    hold.LiftedDate = holdsRow.ChildNodes[13].InnerText.ToDateTimeNullable();
+                                    hold.CaseGuid = caseSummary.CaseGuid;
+
+                                    holds.Add(hold);
+                                }
+                            }
+
+                            // ***********************************   CRIMINAL HISTORY  ***********************************
+                            var crimHistRows = htmlDoc.DocumentNode.SelectNodes(
+                                    "//table[@id='tblCrimHist']/tr[@style='font-size:11px; vertical-align:top; ']");
+
+                            var criminalHistories = new List<CriminalHistory>();
+                            if (crimHistRows != null)
+                            {
+                                foreach (var crimHistRow in crimHistRows)
+                                {
+                                    var criminalHistory = new CriminalHistory();
+
+                                    criminalHistory.CaseNumStatus = crimHistRow.ChildNodes[1].InnerText.Trim();
+                                    criminalHistory.Offense = crimHistRow.ChildNodes[3].InnerText.Trim();
+                                    criminalHistory.DateFiledBooked = crimHistRow.ChildNodes[5].InnerText.Trim();
+                                    criminalHistory.Court = crimHistRow.ChildNodes[7].InnerText.Trim();
+                                    criminalHistory.DefendantStatus = crimHistRow.ChildNodes[9].InnerText.Trim();
+                                    criminalHistory.Disposition = crimHistRow.ChildNodes[11].InnerText.Trim();
+                                    criminalHistory.BondAmount = crimHistRow.ChildNodes[13].InnerText.Trim().ToDecimalNullable();
+                                    criminalHistory.Offense = crimHistRow.ChildNodes[15].InnerText.Trim();
+                                    criminalHistory.NextSetting = crimHistRow.ChildNodes[17].InnerText.Trim().ToDateTimeNullable();
+                                    criminalHistory.CaseGuid = caseSummary.CaseGuid;
+
+                                    criminalHistories.Add(criminalHistory);
+                                }
+                            }
+
+                            // ***********************************   SETTINGS  ***********************************
+                            var settingsRows = htmlDoc.DocumentNode.SelectNodes(
+                                    "//table[@id='tblSettings']/tr[@style='font-size:12px; ']");
+
+                            var settings = new List<Setting>();
+                            if (settingsRows != null)
+                            {
+                                foreach (var settingsRow in settingsRows)
+                                {
+                                    var setting = new Setting();
+
+                                    setting.Date = settingsRow.ChildNodes[1].InnerText.Trim().ToDateTimeNullable();
+                                    setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
+                                    setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
+                                    setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();
+                                    setting.Reason = settingsRow.ChildNodes[9].InnerText.Trim();
+                                    setting.Results = settingsRow.ChildNodes[11].InnerText.Trim();
+                                    setting.Defendant = settingsRow.ChildNodes[13].InnerText.Trim();
+                                    setting.FutureDate = settingsRow.ChildNodes[15].InnerText.Trim().ToDateTimeNullable();
+                                    setting.Comments = settingsRow.ChildNodes[17].InnerText.Trim();
+                                    setting.AttorneyAppearanceIndicator = settingsRow.ChildNodes[19].InnerText.Trim();
+                                    setting.CaseGuid = caseSummary.CaseGuid;
+
+                                    settings.Add(setting);
+                                }
+                            }
+
+                            context.Activities.AddRange(activities);
+                            context.Bonds.AddRange(bonds);
+                            context.Bookings.AddRange(bookings);
+                            context.CaseSummaries.Add(caseSummary);
+                            context.CriminalHistories.AddRange(criminalHistories);
+                            context.Holds.AddRange(holds);
+                            context.Settings.AddRange(settings);
+
+                            context.SaveChanges();
+                        }
+
+                        transaction.Commit();
                     }
-                }
-                
-                // ***********************************   ACTIVITIES  ***********************************
-                var activitiesRows = htmlDoc.DocumentNode.SelectNodes("//table[@id='tblActivities']/tr[@style='font-size:12px; ']");
-                if (activitiesRows != null)
-                {
-                    foreach (var activitiesRow in activitiesRows)
+                    catch
                     {
-                        var date = activitiesRow.ChildNodes[1].InnerText;
-                        var type = activitiesRow.ChildNodes[3].InnerText;
-                        var desc = activitiesRow.ChildNodes[5].InnerText;
-                        var snu = activitiesRow.ChildNodes[7].InnerText;
-                    }
-                }
-                
-                // ***********************************   BOOKINGS  ***********************************
-                var bookingsRows = htmlDoc.DocumentNode.SelectNodes("//table[@id='tblBookings']/tr[@style='font-size:12px; ']");
-                if (bookingsRows != null)
-                {
-                    foreach (var bookingsRow in bookingsRows)
-                    {
-                        var arrDate = bookingsRow.ChildNodes[1].InnerText;
-                        var arrLocation = bookingsRow.ChildNodes[3].InnerText;
-                        var date = bookingsRow.ChildNodes[5].InnerText;
-                    }
-                }
-
-                // ***********************************   HOLDS  ***********************************
-                var holdsRows = htmlDoc.DocumentNode.SelectNodes("//table[@id='tblHolds']/tr[@style='font-size:12px; ']");
-                if (holdsRows != null)
-                {
-                    foreach (var holdsRow in holdsRows)
-                    {
-                        var agPlHold = holdsRow.ChildNodes[1].InnerText;
-                        var agName = holdsRow.ChildNodes[3].InnerText;
-                        var warrantNumber = holdsRow.ChildNodes[5].InnerText;
-                        var bondAmount = holdsRow.ChildNodes[7].InnerText;
-                        var offense = holdsRow.ChildNodes[9].InnerText;
-                        var plDate = holdsRow.ChildNodes[11].InnerText;
-                        var liftDate = holdsRow.ChildNodes[13].InnerText;
-                    }
-                }
-                
-                // ***********************************   CRIMINAL HISTORY  ***********************************
-                var crimHistRows = htmlDoc.DocumentNode.SelectNodes("//table[@id='tblCrimHist']/tr[@style='font-size:11px; vertical-align:top; ']");
-                if (crimHistRows != null)
-                {
-                    foreach (var crimHistRow in crimHistRows)
-                    {
-                        var caseNum = crimHistRow.ChildNodes[1].InnerText.Trim();
-                        var defendant = crimHistRow.ChildNodes[3].InnerText.Trim();
-                        var bookedFiled = crimHistRow.ChildNodes[5].InnerText.Trim();
-                        var court = crimHistRow.ChildNodes[7].InnerText.Trim();
-                        var defStatus = crimHistRow.ChildNodes[9].InnerText.Trim();
-                        var disposition = crimHistRow.ChildNodes[11].InnerText.Trim();
-                        var bondAmt = crimHistRow.ChildNodes[13].InnerText.Trim();
-                        var typeOfAction = crimHistRow.ChildNodes[15].InnerText.Trim();
-                        var nextSetting = crimHistRow.ChildNodes[17].InnerText.Trim();
-                    }
-                }
-
-                // ***********************************   SETTINGS  ***********************************
-                var settingsRows = htmlDoc.DocumentNode.SelectNodes("//table[@id='tblSettings']/tr[@style='font-size:12px; ']");
-                if (settingsRows != null)
-                {
-                    foreach (var settingsRow in settingsRows)
-                    {
-                        var date = settingsRow.ChildNodes[1].InnerText.Trim();
-                        var court = settingsRow.ChildNodes[3].InnerText.Trim();
-                        var postJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
-                        var docketType = settingsRow.ChildNodes[7].InnerText.Trim();
-                        var reason = settingsRow.ChildNodes[9].InnerText.Trim();
-                        var results = settingsRow.ChildNodes[11].InnerText.Trim();
-                        var defendant = settingsRow.ChildNodes[13].InnerText.Trim();
-                        var futureDate = settingsRow.ChildNodes[15].InnerText.Trim();
-                        var comments = settingsRow.ChildNodes[17].InnerText.Trim();
-                        var atApIndicator = settingsRow.ChildNodes[19].InnerText.Trim();
+                        transaction.Rollback();
+                        throw;
                     }
                 }
             }
