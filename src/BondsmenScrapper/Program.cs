@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -28,16 +29,6 @@ namespace BondsmenScrapper
                 return null;
             DateTime dt;
             if (DateTime.TryParse(str, out dt))
-                return dt;
-            return null;
-        }
-
-        public static decimal? ToDecimalNullable(this string str)
-        {
-            if (string.IsNullOrEmpty(str))
-                return null;
-            decimal dt;
-            if (decimal.TryParse(str, out dt))
                 return dt;
             return null;
         }

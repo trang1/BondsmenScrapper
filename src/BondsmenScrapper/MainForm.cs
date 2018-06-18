@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Configuration;
 using System.Data;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -57,19 +58,13 @@ namespace BondsmenScrapper
             //File.WriteAllText("C:\\temp\\d1.htm", htmlDoc.Text);
 
             var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
-            var cause = caseRow.ChildNodes[3].InnerText.Trim() + ", " + caseRow.ChildNodes[5].InnerText.Trim();
-
+            var cause =
+                $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}"; 
 
             var connectionString = ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
 
             using (var connection = new MySqlConnection(connectionString))
             {
-                //connection.Open();
-                using (var context = new DataContext(connection, false))
-                {
-                    var cc = context.CaseSummaries.ToList();
-                }
-
                  //   var transaction = connection.BeginTransaction();
 
                 try
@@ -77,13 +72,11 @@ namespace BondsmenScrapper
                     // DbConnection that is already opened
                     using (var context = new DataContext(connection, false))
                     {
-
                         // Interception/SQL logging
                         //context.Database.Log = Console.WriteLine;
 
                         // Passing an existing transaction to the context
                         //context.Database.UseTransaction(transaction);
-
 
                         // *********************    CASE DETAILS **************************
                         var caseDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCaseDetails']");
@@ -91,8 +84,13 @@ namespace BondsmenScrapper
                         // No case - returning
                         if (caseDetailsTable == null) return;
 
-                        var caseSummary = new CaseSummary();
+                        var existingCase = context.CaseSummaries.FirstOrDefault(c => c.CaseNumber == cause);
 
+                        var isUpdate = existingCase != null;
+
+                        var caseSummary = existingCase ?? new CaseSummary();
+
+                        caseSummary.CaseNumber = cause;
                         caseSummary.FileDate = DateTime.Parse(caseDetailsTable.ChildNodes[3].ChildNodes[3].InnerText);
                         caseSummary.CaseStatus = caseDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
                         caseSummary.Offense = caseDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
@@ -101,8 +99,7 @@ namespace BondsmenScrapper
                         caseSummary.CompletionDate =
                             caseDetailsTable.ChildNodes[23].ChildNodes[3].InnerText.ToDateTimeNullable();
                         caseSummary.DefendantStatus = caseDetailsTable.ChildNodes[27].ChildNodes[3].InnerText;
-                        caseSummary.BondAmount =
-                            caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText.ToDecimalNullable();
+                        caseSummary.BondAmount = caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText;
                         caseSummary.SettingDate =
                             caseDetailsTable.ChildNodes[35].ChildNodes[3].InnerText.ToDateTimeNullable();
                         caseSummary.CaseGuid = Guid.NewGuid().ToString();
@@ -151,9 +148,20 @@ namespace BondsmenScrapper
                             caseSummary.CpjCourtType = courtDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
                         }
 
+                        if(!isUpdate)
+                            context.CaseSummaries.Add(caseSummary);
+
+                        context.SaveChanges();
+
                         // ***********************************   BONDS  ***********************************
                         var bondsRows = htmlDoc.DocumentNode.SelectNodes
                             ("//table[@id='tblBonds']/tr[@style='font-size:12px; ']");
+
+                        if (isUpdate)
+                        {
+                            var existingBonds = context.Bonds.Where(b => b.CaseId == caseSummary.Id).ToList();
+                            existingBonds.ForEach(b => context.Bonds.Remove(b));
+                        }
 
                         var bonds = new List<Bond>();
                         if (bondsRows != null)
@@ -176,17 +184,23 @@ namespace BondsmenScrapper
                         var activitiesRows = htmlDoc.DocumentNode.SelectNodes(
                             "//table[@id='tblActivities']/tr[@style='font-size:12px; ']");
 
-                        var activities = new List<Acitvity>();
+                        if (isUpdate)
+                        {
+                            var existingActivities = context.Activities.Where(a => a.CaseId == caseSummary.Id).ToList();
+                            existingActivities.ForEach(a => context.Activities.Remove(a));
+                        }
+
+                        var activities = new List<Activity>();
                         if (activitiesRows != null)
                         {
                             foreach (var activitiesRow in activitiesRows)
                             {
-                                var activity = new Acitvity();
+                                var activity = new Activity();
 
                                 activity.Date = DateTime.Parse(activitiesRow.ChildNodes[1].InnerText);
                                 activity.Type = activitiesRow.ChildNodes[3].InnerText;
                                 activity.Description = activitiesRow.ChildNodes[5].InnerText;
-                                activity.Snu = activitiesRow.ChildNodes[7].InnerText;
+                                activity.SnuCfi = activitiesRow.ChildNodes[7].InnerText;
                                 activity.CaseId = caseSummary.Id;
 
                                 activities.Add(activity);
@@ -196,6 +210,13 @@ namespace BondsmenScrapper
                         // ***********************************   BOOKINGS  ***********************************
                         var bookingsRows = htmlDoc.DocumentNode.SelectNodes(
                             "//table[@id='tblBookings']/tr[@style='font-size:12px; ']");
+
+                        if (isUpdate)
+                        {
+                            var existingBookings = context.Bookings.Where(b => b.CaseId == caseSummary.Id).ToList();
+                            existingBookings.ForEach(b => context.Bookings.Remove(b));
+                        }
+
                         var bookings = new List<Booking>();
                         if (bookingsRows != null)
                         {
@@ -216,6 +237,11 @@ namespace BondsmenScrapper
                         var holdsRows =
                             htmlDoc.DocumentNode.SelectNodes("//table[@id='tblHolds']/tr[@style='font-size:12px; ']");
 
+                        if (isUpdate)
+                        {
+                            var existingHolds = context.Holds.Where(h => h.CaseId == caseSummary.Id).ToList();
+                            existingHolds.ForEach(h => context.Holds.Remove(h));
+                        }
                         var holds = new List<Hold>();
                         if (holdsRows != null)
                         {
@@ -226,7 +252,7 @@ namespace BondsmenScrapper
                                 hold.AgencyPlacingHold = holdsRow.ChildNodes[1].InnerText;
                                 hold.AgencyName = holdsRow.ChildNodes[3].InnerText;
                                 hold.WarrantNumber = holdsRow.ChildNodes[5].InnerText;
-                                hold.BondAmount = holdsRow.ChildNodes[7].InnerText.ToDecimalNullable();
+                                hold.BondAmount = holdsRow.ChildNodes[7].InnerText;
                                 hold.Offense = holdsRow.ChildNodes[9].InnerText;
                                 hold.PlacedDate = holdsRow.ChildNodes[11].InnerText.ToDateTimeNullable();
                                 hold.LiftedDate = holdsRow.ChildNodes[13].InnerText.ToDateTimeNullable();
@@ -239,6 +265,12 @@ namespace BondsmenScrapper
                         // ***********************************   CRIMINAL HISTORY  ***********************************
                         var crimHistRows = htmlDoc.DocumentNode.SelectNodes(
                             "//table[@id='tblCrimHist']/tr[@style='font-size:11px; vertical-align:top; ']");
+
+                        if (isUpdate)
+                        {
+                            var existingHistories = context.CriminalHistories.Where(h => h.CaseId == caseSummary.Id).ToList();
+                            existingHistories.ForEach(h => context.CriminalHistories.Remove(h));
+                        }
 
                         var criminalHistories = new List<CriminalHistory>();
                         if (crimHistRows != null)
@@ -253,8 +285,7 @@ namespace BondsmenScrapper
                                 criminalHistory.Court = crimHistRow.ChildNodes[7].InnerText.Trim();
                                 criminalHistory.DefendantStatus = crimHistRow.ChildNodes[9].InnerText.Trim();
                                 criminalHistory.Disposition = crimHistRow.ChildNodes[11].InnerText.Trim();
-                                criminalHistory.BondAmount =
-                                    crimHistRow.ChildNodes[13].InnerText.Trim().ToDecimalNullable();
+                                criminalHistory.BondAmount = crimHistRow.ChildNodes[13].InnerText.Trim();
                                 criminalHistory.Offense = crimHistRow.ChildNodes[15].InnerText.Trim();
                                 criminalHistory.NextSetting =
                                     crimHistRow.ChildNodes[17].InnerText.Trim().ToDateTimeNullable();
@@ -268,6 +299,12 @@ namespace BondsmenScrapper
                         var settingsRows = htmlDoc.DocumentNode.SelectNodes(
                             "//table[@id='tblSettings']/tr[@style='font-size:12px; ']");
 
+                        if (isUpdate)
+                        {
+                            var existingSettings = context.Settings.Where(s => s.CaseId == caseSummary.Id).ToList();
+                            existingSettings.ForEach(s => context.Settings.Remove(s));
+                        }
+
                         var settings = new List<Setting>();
                         if (settingsRows != null)
                         {
@@ -275,7 +312,7 @@ namespace BondsmenScrapper
                             {
                                 var setting = new Setting();
 
-                                setting.Date = settingsRow.ChildNodes[1].InnerText.Trim().ToDateTimeNullable();
+                                setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim(), new CultureInfo("en-US"));
                                 setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
                                 setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
                                 setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();
@@ -288,16 +325,17 @@ namespace BondsmenScrapper
                                 setting.CaseId = caseSummary.Id;
 
                                 settings.Add(setting);
+
                             }
                         }
 
-                        //context.Activities.AddRange(activities);
-                        //context.Bonds.AddRange(bonds);
-                        //context.Bookings.AddRange(bookings);
-                        context.CaseSummaries.Add(caseSummary);
-                        //context.CriminalHistories.AddRange(criminalHistories);
-                        //context.Holds.AddRange(holds);
-                        //context.Settings.AddRange(settings);
+                        activities.ForEach(a=>context.Activities.Add(a));
+                        bonds.ForEach(b => context.Bonds.Add(b));
+                        bookings.ForEach(b => context.Bookings.Add(b));
+                        criminalHistories.ForEach(c => context.CriminalHistories.Add(c));
+                        holds.ForEach(h => context.Holds.Add(h));
+                        settings.ForEach(s => context.Settings.Add(s));
+
 
                         context.SaveChanges();
                     }
@@ -311,7 +349,7 @@ namespace BondsmenScrapper
                 }
             }
         }
-
+        
         private void BeginScrapping()
         {
             var loginUrl = ConfigurationManager.AppSettings.Get("LoginUrl");
@@ -481,7 +519,7 @@ namespace BondsmenScrapper
                             caseSummary.Disposition = caseDetailsTable.ChildNodes[19].ChildNodes[3].InnerText;
                             caseSummary.CompletionDate = caseDetailsTable.ChildNodes[23].ChildNodes[3].InnerText.ToDateTimeNullable();
                             caseSummary.DefendantStatus = caseDetailsTable.ChildNodes[27].ChildNodes[3].InnerText;
-                            caseSummary.BondAmount = caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText.ToDecimalNullable();
+                            caseSummary.BondAmount = caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText;
                             caseSummary.SettingDate = caseDetailsTable.ChildNodes[35].ChildNodes[3].InnerText.ToDateTimeNullable();
                             caseSummary.CaseGuid = Guid.NewGuid().ToString();
 
@@ -554,17 +592,17 @@ namespace BondsmenScrapper
                             var activitiesRows = htmlDoc.DocumentNode.SelectNodes(
                                     "//table[@id='tblActivities']/tr[@style='font-size:12px; ']");
 
-                            var activities = new List<Acitvity>();
+                            var activities = new List<Activity>();
                             if (activitiesRows != null)
                             {
                                 foreach (var activitiesRow in activitiesRows)
                                 {
-                                    var activity = new Acitvity();
+                                    var activity = new Activity();
 
                                     activity.Date = DateTime.Parse(activitiesRow.ChildNodes[1].InnerText);
                                     activity.Type = activitiesRow.ChildNodes[3].InnerText;
                                     activity.Description = activitiesRow.ChildNodes[5].InnerText;
-                                    activity.Snu = activitiesRow.ChildNodes[7].InnerText;
+                                    activity.SnuCfi = activitiesRow.ChildNodes[7].InnerText;
                                     activity.CaseId = caseSummary.Id;
 
                                     activities.Add(activity);
@@ -604,7 +642,7 @@ namespace BondsmenScrapper
                                     hold.AgencyPlacingHold = holdsRow.ChildNodes[1].InnerText;
                                     hold.AgencyName = holdsRow.ChildNodes[3].InnerText;
                                     hold.WarrantNumber = holdsRow.ChildNodes[5].InnerText;
-                                    hold.BondAmount = holdsRow.ChildNodes[7].InnerText.ToDecimalNullable();
+                                    hold.BondAmount = holdsRow.ChildNodes[7].InnerText;
                                     hold.Offense = holdsRow.ChildNodes[9].InnerText;
                                     hold.PlacedDate = holdsRow.ChildNodes[11].InnerText.ToDateTimeNullable();
                                     hold.LiftedDate = holdsRow.ChildNodes[13].InnerText.ToDateTimeNullable();
@@ -631,7 +669,7 @@ namespace BondsmenScrapper
                                     criminalHistory.Court = crimHistRow.ChildNodes[7].InnerText.Trim();
                                     criminalHistory.DefendantStatus = crimHistRow.ChildNodes[9].InnerText.Trim();
                                     criminalHistory.Disposition = crimHistRow.ChildNodes[11].InnerText.Trim();
-                                    criminalHistory.BondAmount = crimHistRow.ChildNodes[13].InnerText.Trim().ToDecimalNullable();
+                                    criminalHistory.BondAmount = crimHistRow.ChildNodes[13].InnerText.Trim();
                                     criminalHistory.Offense = crimHistRow.ChildNodes[15].InnerText.Trim();
                                     criminalHistory.NextSetting = crimHistRow.ChildNodes[17].InnerText.Trim().ToDateTimeNullable();
                                     criminalHistory.CaseId = caseSummary.Id;
@@ -651,7 +689,7 @@ namespace BondsmenScrapper
                                 {
                                     var setting = new Setting();
 
-                                    setting.Date = settingsRow.ChildNodes[1].InnerText.Trim().ToDateTimeNullable();
+                                    setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim());
                                     setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
                                     setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
                                     setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();

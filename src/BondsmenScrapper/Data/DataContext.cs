@@ -10,7 +10,7 @@ namespace BondsmenScrapper.Data
     //[DbConfigurationType(typeof(MySqlEFConfiguration))]
     public partial class DataContext : DbContext
     {
-        public DbSet<Acitvity> Activities { get; set; }
+        public DbSet<Activity> Activities { get; set; }
         public DbSet<Bond> Bonds { get; set; }
         public DbSet<Booking> Bookings { get; set; }
         public DbSet<CaseSummary> CaseSummaries { get; set; }
@@ -33,10 +33,10 @@ namespace BondsmenScrapper.Data
         protected override void OnModelCreating(DbModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
-            //modelBuilder.Entity<Acitvity>().MapToStoredProcedures();
+            //modelBuilder.Entity<Activity>().MapToStoredProcedures();
             //modelBuilder.Entity<Bond>().MapToStoredProcedures();
             //modelBuilder.Entity<Booking>().MapToStoredProcedures();
-            //modelBuilder.Entity<CaseSummary>().MapToStoredProcedures();
+            //modelBuilder.Entity<CaseSummary>().Map();
             //modelBuilder.Entity<CriminalHistory>().MapToStoredProcedures();
             //modelBuilder.Entity<Hold>().MapToStoredProcedures();
             //modelBuilder.Entity<Setting>().MapToStoredProcedures();
@@ -52,7 +52,7 @@ Last_Instrument_Filed VARCHAR(64) DEFAULT NULL,
 Disposition VARCHAR(128) DEFAULT NULL,
 Completion_Date DATE DEFAULT NULL,
   Defendant_Status VARCHAR(64) DEFAULT NULL,
- Bond_Amount DECIMAL(10, 2) DEFAULT NULL,
+ Bond_Amount string(10, 2) DEFAULT NULL,
 Setting_Date DATE DEFAULT NULL,
   Def_Race_Sex VARCHAR(16) DEFAULT NULL,
  Def_Eyes VARCHAR(16) DEFAULT NULL,
@@ -84,7 +84,7 @@ Case_GUID VARCHAR(32),
         public string Disposition { get; set; }
         public DateTime? CompletionDate { get; set; }
         public string DefendantStatus { get; set; }
-        public decimal? BondAmount { get; set; }
+        public string BondAmount { get; set; }
         public DateTime? SettingDate { get; set; }
         public string DefendantRaceSex { get; set; }
         public string DefendantEyes { get; set; }
@@ -132,14 +132,14 @@ Case_GUID VARCHAR(32),
   SNU VARCHAR (32) DEFAULT NULL,
   INDEX activity_FK1 USING BTREE (Case_Guid)
 )*/
-    public partial class Acitvity
+    public partial class Activity
     {
         public int Id { get; set; }
         public int CaseId { get; set; }
         public DateTime Date { get; set; }
         public string Type { get; set; }
         public string Description { get; set; }
-        public string Snu { get; set; }
+        public string SnuCfi { get; set; }
     }
 
     /*CREATE TABLE bondsman.booking(
@@ -165,7 +165,7 @@ Case_GUID VARCHAR(32),
   Agency_Placing_Hold VARCHAR (64) DEFAULT NULL,
   Agency_Name VARCHAR (64) DEFAULT NULL,
   Warrant_Number VARCHAR (64) DEFAULT NULL,
-  Bond_Amount DECIMAL (10, 2) DEFAULT NULL,
+  Bond_Amount string (10, 2) DEFAULT NULL,
   Offense VARCHAR (64) DEFAULT NULL,
   Placed_Date DATE DEFAULT NULL,
   Lifted_Date DATE DEFAULT NULL,
@@ -180,7 +180,7 @@ Case_GUID VARCHAR(32),
         public string AgencyPlacingHold { get; set; }
         public string AgencyName { get; set; }
         public string WarrantNumber { get; set; }
-        public decimal? BondAmount { get; set; }
+        public string BondAmount { get; set; }
         public string Offense { get; set; }
         public DateTime? PlacedDate { get; set; }
         public DateTime? LiftedDate { get; set; }
@@ -195,7 +195,7 @@ Case_GUID VARCHAR(32),
   Court VARCHAR (16) DEFAULT NULL,
   Defendant_Status VARCHAR (64) DEFAULT NULL,
   Disposition VARCHAR (128) DEFAULT NULL,
-  Bond_Amount DECIMAL (10, 2) DEFAULT NULL,
+  Bond_Amount string (10, 2) DEFAULT NULL,
   Offense VARCHAR (64) DEFAULT NULL,
   Next_Setting DATE DEFAULT NULL,
   INDEX criminal_history_FK1 USING BTREE (Case_GUID),
@@ -213,7 +213,7 @@ Case_GUID VARCHAR(32),
         public string Court { get; set; }
         public string DefendantStatus { get; set; }
         public string Disposition { get; set; }
-        public decimal? BondAmount { get; set; }
+        public string BondAmount { get; set; }
         public string Offense { get; set; }
         public DateTime? NextSetting { get; set; }
     }
@@ -239,7 +239,7 @@ Case_GUID VARCHAR(32),
     {
         public int Id { get; set; }
         public int CaseId { get; set; }
-        public DateTime? Date { get; set; }
+        public DateTime Date { get; set; }
         public string Court { get; set; }
         public string PostJdgm { get; set; }
         public string DocketType { get; set; }
