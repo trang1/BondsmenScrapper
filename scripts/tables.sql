@@ -1,0 +1,158 @@
+-- Скрипт сгенерирован Devart dbForge Studio for MySQL, Версия 3.10.227.1
+-- Дата: 6/18/2018 8:30:59 AM
+-- Версия сервера: 5.5.23
+-- Версия клиента: 4.1
+
+CREATE TABLE bondsman.casesummaries(
+  CaseNumber VARCHAR (64) NOT NULL,
+  FileDate DATE NOT NULL,
+  CaseStatus VARCHAR (64) DEFAULT NULL,
+  Offense VARCHAR (64) DEFAULT NULL,
+  LastInstrumentFiled VARCHAR (64) DEFAULT NULL,
+  Disposition VARCHAR (128) DEFAULT NULL,
+  CompletionDate DATE DEFAULT NULL,
+  DefendantStatus VARCHAR (64) DEFAULT NULL,
+  BondAmount DECIMAL (10, 2) DEFAULT NULL,
+  SettingDate DATE DEFAULT NULL,
+  DefendantRaceSex VARCHAR (16) DEFAULT NULL,
+  DefendantEyes VARCHAR (16) DEFAULT NULL,
+  DefendantSkin VARCHAR (16) DEFAULT NULL,
+  DefendantDOB DATE DEFAULT NULL,
+  DefendantUSCitizen VARCHAR (16) DEFAULT NULL,
+  DefendantAddress VARCHAR (512) DEFAULT NULL,
+  DefendantMarkings VARCHAR (256) DEFAULT NULL,
+  DefendantHeightWeight VARCHAR (32) DEFAULT NULL,
+  DefendantHair VARCHAR (16) DEFAULT NULL,
+  DefendantBuild VARCHAR (16) DEFAULT NULL,
+  DefendantInCustody VARCHAR (16) DEFAULT NULL,
+  DefendantPlaceOfBirth VARCHAR (32) DEFAULT NULL,
+  CPJCurrentCourt VARCHAR (16) DEFAULT NULL,
+  CPJAddress VARCHAR (512) DEFAULT NULL,
+  CPJJudgeName VARCHAR (128) DEFAULT NULL,
+  CPJCourtType VARCHAR (32) DEFAULT NULL,
+  CaseGUID VARCHAR (32) NOT NULL,
+  Id INT (11) NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (Id)
+)
+ENGINE = INNODB
+AUTO_INCREMENT = 1
+CHARACTER SET utf8
+COLLATE utf8_general_ci;
+
+CREATE TABLE bondsman.activity(
+  CaseId INT (11) NOT NULL,
+  `Date` DATE NOT NULL,
+  Type VARCHAR (64) NOT NULL,
+  Description VARCHAR (512) DEFAULT NULL,
+  SNU_CFI VARCHAR (32) DEFAULT NULL,
+  Id INT (11) NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (Id),
+  INDEX activity_FK1 USING BTREE (CaseId),
+  CONSTRAINT activity_FK1 FOREIGN KEY (CaseId)
+  REFERENCES bondsman.casesummaries (Id)
+)
+ENGINE = INNODB
+AUTO_INCREMENT = 1
+CHARACTER SET utf8
+COLLATE utf8_general_ci;
+
+CREATE TABLE bondsman.bond(
+  CaseId INT (11) NOT NULL,
+  `Date` DATE NOT NULL,
+  Type VARCHAR (64) NOT NULL,
+  Description VARCHAR (512) DEFAULT NULL,
+  SNU VARCHAR (32) DEFAULT NULL,
+  Id INT (11) NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (Id),
+  INDEX bond_FK1 USING BTREE (CaseId),
+  CONSTRAINT bond_FK1 FOREIGN KEY (CaseId)
+  REFERENCES bondsman.casesummaries (Id)
+)
+ENGINE = INNODB
+AUTO_INCREMENT = 1
+CHARACTER SET utf8
+COLLATE utf8_general_ci;
+
+CREATE TABLE bondsman.booking(
+  CaseId INT (11) NOT NULL,
+  Arrest_Date DATETIME DEFAULT NULL,
+  Arrest_Location VARCHAR (64) DEFAULT NULL,
+  Booking_Date DATETIME DEFAULT NULL,
+  Id INT (11) NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (Id),
+  INDEX booking_FK1 USING BTREE (CaseId),
+  CONSTRAINT booking_FK1 FOREIGN KEY (CaseId)
+  REFERENCES bondsman.casesummaries (Id)
+)
+ENGINE = INNODB
+AUTO_INCREMENT = 1
+CHARACTER SET utf8
+COLLATE utf8_general_ci;
+
+CREATE TABLE bondsman.criminal_history(
+  CaseId INT (11) NOT NULL,
+  Case_Num_Status VARCHAR (128) NOT NULL,
+  Defendant VARCHAR (128) DEFAULT NULL,
+  Date_Filed DATE DEFAULT NULL,
+  Date_Booked DATE DEFAULT NULL,
+  Court VARCHAR (16) DEFAULT NULL,
+  Defendant_Status VARCHAR (64) DEFAULT NULL,
+  Disposition VARCHAR (128) DEFAULT NULL,
+  Bond_Amount DECIMAL (10, 2) DEFAULT NULL,
+  Offense VARCHAR (64) DEFAULT NULL,
+  Next_Setting DATE DEFAULT NULL,
+  Id INT (11) NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (Id),
+  INDEX criminal_history_FK1 USING BTREE (CaseId),
+  CONSTRAINT criminal_history_FK1 FOREIGN KEY (CaseId)
+  REFERENCES bondsman.casesummaries (Id)
+)
+ENGINE = INNODB
+AUTO_INCREMENT = 1
+CHARACTER SET utf8
+COLLATE utf8_general_ci;
+
+CREATE TABLE bondsman.hold(
+  CaseId INT (11) DEFAULT NULL,
+  Agency_Placing_Hold VARCHAR (64) DEFAULT NULL,
+  Agency_Name VARCHAR (64) DEFAULT NULL,
+  Warrant_Number VARCHAR (64) DEFAULT NULL,
+  Bond_Amount DECIMAL (10, 2) DEFAULT NULL,
+  Offense VARCHAR (64) DEFAULT NULL,
+  Placed_Date DATE DEFAULT NULL,
+  Lifted_Date DATE DEFAULT NULL,
+  Id INT (11) NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (Id),
+  INDEX hold_FK1 USING BTREE (CaseId),
+  CONSTRAINT hold_FK1 FOREIGN KEY (CaseId)
+  REFERENCES bondsman.casesummaries (Id)
+)
+ENGINE = INNODB
+AUTO_INCREMENT = 1
+CHARACTER SET utf8
+COLLATE utf8_general_ci;
+
+CREATE TABLE bondsman.setting(
+  CaseId INT (11) NOT NULL,
+  `Date` DATETIME NOT NULL,
+  Court VARCHAR (16) DEFAULT NULL,
+  Post_Jdgm VARCHAR (32) DEFAULT NULL,
+  Docket_Type VARCHAR (32) DEFAULT NULL,
+  Reason VARCHAR (64) DEFAULT NULL,
+  Results VARCHAR (64) DEFAULT NULL,
+  Defendant VARCHAR (64) DEFAULT NULL,
+  Future_Date DATETIME DEFAULT NULL,
+  Comments VARCHAR (128) DEFAULT NULL,
+  Attorney_Appearance_Indicator VARCHAR (64) DEFAULT NULL,
+  Id INT (11) NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (Id),
+  INDEX setting_FK1 USING BTREE (CaseId),
+  CONSTRAINT setting_FK1 FOREIGN KEY (CaseId)
+  REFERENCES bondsman.casesummaries (Id)
+)
+ENGINE = INNODB
+AUTO_INCREMENT = 1
+CHARACTER SET utf8
+COLLATE utf8_general_ci;
+
+
