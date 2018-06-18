@@ -4,6 +4,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Configuration;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -50,12 +51,10 @@ namespace BondsmenScrapper
 
         void Test()
         {
-            HtmlWeb web = new HtmlWeb();
+            var web = new HtmlWeb();
             HtmlDocument htmlDoc;
 
             htmlDoc = web.Load("c:\\temp\\d.htm");
-
-            //File.WriteAllText("C:\\temp\\d1.htm", htmlDoc.Text);
 
             var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
             var cause =
@@ -65,8 +64,6 @@ namespace BondsmenScrapper
 
             using (var connection = new MySqlConnection(connectionString))
             {
-                 //   var transaction = connection.BeginTransaction();
-
                 try
                 {
                     // DbConnection that is already opened
@@ -74,9 +71,6 @@ namespace BondsmenScrapper
                     {
                         // Interception/SQL logging
                         //context.Database.Log = Console.WriteLine;
-
-                        // Passing an existing transaction to the context
-                        //context.Database.UseTransaction(transaction);
 
                         // *********************    CASE DETAILS **************************
                         var caseDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCaseDetails']");
@@ -339,13 +333,12 @@ namespace BondsmenScrapper
 
                         context.SaveChanges();
                     }
-
-                  //  transaction.Commit();
                 }
                 catch(Exception e)
                 {
-                   // transaction.Rollback();
-                   // throw;
+                    var error = "Error processing row. " + e.Message;
+                    Log(error);
+                    Trace.TraceError(error + e.StackTrace);
                 }
             }
         }
@@ -457,8 +450,9 @@ namespace BondsmenScrapper
                 var lastPage = int.Parse(lastPageLink.Value.Split('\'')[3]);
                 return lastPage;
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                Trace.TraceError(e.Message+e.StackTrace);
                 return 1;
             }
         }
@@ -838,9 +832,9 @@ namespace BondsmenScrapper
                     var value = pair.Split('=')[1];
                     values.Add(key, value);
                 }
-                catch (Exception)
+                catch (Exception e)
                 {
-                    
+                    Trace.TraceError(e.Message + e.StackTrace);
                 }
             }
         }
@@ -856,9 +850,9 @@ namespace BondsmenScrapper
                     var value = pair.Split('=')[1];
                     values.Add(key, value);
                 }
-                catch (Exception)
+                catch (Exception e)
                 {
-
+                    Trace.TraceError(e.Message + e.StackTrace);
                 }
             }
         }
