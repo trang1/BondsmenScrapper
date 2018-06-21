@@ -27,7 +27,7 @@ namespace BondsmenScrapper
         private volatile bool _started;
         private WebClient _client;
         private WebProxy _proxy;
-        public string _cookie;
+        private string _cookie;
 
         public MainForm()
         {
@@ -338,100 +338,123 @@ namespace BondsmenScrapper
         {
             Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US", false);
 
-            var loginUrl = ConfigurationManager.AppSettings.Get("LoginUrl");
-            var url = ConfigurationManager.AppSettings.Get("Url");
-            var proxy = ConfigurationManager.AppSettings.Get("ProxyIP");
-            int port = -1;
-            int.TryParse(ConfigurationManager.AppSettings.Get("ProxyPort"), out port);
-            
-            if (!string.IsNullOrEmpty(proxy) && port != -1)
+            try
             {
-                _proxy = new WebProxy(proxy, port);
-                _client.Proxy = _proxy;
-                Log($"Using proxy {proxy}:{port}");
-            }
-            
-            var web = new HtmlWeb();
-            HtmlDocument htmlDoc;
-            web.PostResponse = delegate(HttpWebRequest request, HttpWebResponse response)
-            {
-                var cookies = response.Headers["Set-Cookie"];
-                if (cookies != null)
+                var loginUrl = ConfigurationManager.AppSettings.Get("LoginUrl");
+                var url = ConfigurationManager.AppSettings.Get("Url");
+                var proxy = ConfigurationManager.AppSettings.Get("ProxyIP");
+                var port = 0;
+
+                if(!string.IsNullOrEmpty(proxy))
+                    port = int.Parse(ConfigurationManager.AppSettings.Get("ProxyPort"));
+
+                if (!string.IsNullOrEmpty(proxy) && port > 0)
                 {
-                    var sessionId = cookies.Split(';')[0];
-                    _client.Headers.Add(HttpRequestHeader.Cookie, sessionId + "; Login=");
+                    _proxy = new WebProxy(proxy, port);
+                    _client.Proxy = _proxy;
+                    Log($"Using proxy {proxy}:{port}");
                 }
-            };
-            Log("Connecting to the website");
-            if (_proxy != null)
-                htmlDoc = web.Load(loginUrl, "GET", _proxy, null);
-            else
-                htmlDoc = web.Load(loginUrl);
 
-            Thread.Sleep(2000);
-
-            Log("Trying to login");
-            if (Login(htmlDoc, loginUrl))
-            {
-                Log("Login successful");
-
-                web = new HtmlWeb();
-                web.PreRequest = delegate (HttpWebRequest request)
+                var web = new HtmlWeb();
+                HtmlDocument htmlDoc = null;
+                
+                web.PostResponse = delegate(HttpWebRequest request, HttpWebResponse response)
                 {
-                    request.Headers["Cookie"] = _cookie;
-                    return true;
-                };
-                Log("Loading search form");
-                if (_proxy != null)
-                    htmlDoc = web.Load(url, "GET", _proxy, null);
-                else
-                    htmlDoc = web.Load(url);
-
-                Log("Making a request");
-                var result = Search(htmlDoc);
-
-
-                if (!string.IsNullOrEmpty(result))
-                {
-                    var lastPage = GetLastPage(result);
-
-                    var page = 1;
-                    do
+                    var cookies = response.Headers["Set-Cookie"];
+                    if (cookies != null)
                     {
-                        Log($"Processing page = {page}");
+                        var sessionId = cookies.Split(';')[0];
+                        _client.Headers.Add(HttpRequestHeader.Cookie, sessionId + "; Login=");
+                    }
+                };
 
-                        if (page > 1)
-                            result = GetNextResultsPage(htmlDoc, page);
+                Log("Connecting to the website");
 
-                        htmlDoc = new HtmlDocument();
-                        htmlDoc.LoadHtml(result);
+                new Action(() =>
+                {
+                    if (_proxy != null)
+                        htmlDoc = web.Load(loginUrl, "GET", _proxy, null);
+                    else
+                        htmlDoc = web.Load(loginUrl);
+                    //todo:check if page is ok
+                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
 
-                        var rows =
-                            htmlDoc.DocumentNode.SelectNodes(
-                                "//table[@class='resultHeader contentwidth']/tr[not(@class='trResultHeader')]");
-                        if (rows != null)
+                Thread.Sleep(2000);
+
+                Log("Trying to login");
+                if (Login(htmlDoc, loginUrl))
+                {
+                    Log("Login successful");
+
+                    web = new HtmlWeb();
+                    web.PreRequest = delegate(HttpWebRequest request)
+                    {
+                        request.Headers["Cookie"] = _cookie;
+                        return true;
+                    };
+                    Log("Loading search form");
+                    if (_proxy != null)
+                        htmlDoc = web.Load(url, "GET", _proxy, null);
+                    else
+                        htmlDoc = web.Load(url);
+
+                    Log("Making a request");
+                    var result = Search(htmlDoc);
+
+
+                    if (!string.IsNullOrEmpty(result))
+                    {
+                        var lastPage = GetLastPage(result);
+                        Log($"Total pages count = {lastPage}");
+
+                        var page = 1;
+                        do
                         {
-                            var filledRows = rows.Where(row => !string.IsNullOrEmpty(row.ChildNodes[11].InnerText.Trim())).ToList();
-                            foreach (var row in filledRows)
+                            Log($"Processing page = {page}");
+
+                            if (page > 1)
+                                result = GetNextResultsPage(htmlDoc, page);
+
+                            htmlDoc = new HtmlDocument();
+                            htmlDoc.LoadHtml(result);
+
+                            var rows =
+                                htmlDoc.DocumentNode.SelectNodes(
+                                    "//table[@class='resultHeader contentwidth']/tr[not(@class='trResultHeader')]");
+                            if (rows != null)
                             {
-                                ProcessTableRow(web, row);
-                                Thread.Sleep(1000);
+                                var filledRows =
+                                    rows.Where(row => !string.IsNullOrEmpty(row.ChildNodes[11].InnerText.Trim()))
+                                        .ToList();
+                                foreach (var row in filledRows)
+                                {
+                                    ProcessTableRow(web, row);
+                                    Thread.Sleep(1000);
+                                }
+                                Log($"Processed {filledRows.Count} rows");
                             }
-                            Log($"Processed {filledRows.Count} rows");
-                        }
-                        page++;
+                            page++;
 
-                        if (!_started)
-                            break;
+                            if (!_started)
+                                break;
 
-                        Thread.Sleep((page % 4 + 1)*1000);
+                            Thread.Sleep((page%4 + 1)*1000);
 
-                    } while (page <= lastPage );
+                        } while (page <= lastPage);
+                    }
+                }
+                else
+                {
+                    Log("Login failed");
                 }
             }
-            else
+            catch (Exception e)
             {
-                Log("Login failed");
+                Log("An error occured. " + e.Message);
+                Trace.TraceError(e.Message + e.StackTrace);
+            }
+            finally
+            {
                 BeginInvoke(new Action(Stop));
             }
         }
@@ -478,7 +501,6 @@ namespace BondsmenScrapper
                 {
                     try
                     {
-                        // DbConnection that is already opened
                         using (var context = new DataContext(connection, false))
                         {
                             // Interception/SQL logging
@@ -778,18 +800,8 @@ namespace BondsmenScrapper
             _client.Headers[HttpRequestHeader.ContentType] = "application/x-www-form-urlencoded";
             _client.Headers[HttpRequestHeader.Host] = "www.hcdistrictclerk.com";
             _client.Headers[HttpRequestHeader.Cookie] = _cookie;
-            //_client.Headers.Add("DNT", "1");
-            //_client.Headers.Add(HttpRequestHeader.Referer, url);
-            //_client.Headers.Add("Upgrade-Insecure-Requests", "1");
-            //_client.Headers.Add(HttpRequestHeader.UserAgent, "Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:60.0) Gecko/20100101 Firefox/60.0");
-            //_client.Headers.Add(HttpRequestHeader.KeepAlive, "");
-            //_client.Headers.Add(HttpRequestHeader.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            //_client.Headers.Add(HttpRequestHeader.AcceptEncoding, "gzip, deflate, br");
-            //_client.Headers.Add(HttpRequestHeader.AcceptLanguage, "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3");
-            // var content = new FormUrlEncodedContent(values);
 
             var result = Encoding.ASCII.GetString(_client.UploadValues(url, values));
-            //File.WriteAllText("C:\\temp\\2.htm", result);
             return result;
         }
 
@@ -825,18 +837,8 @@ namespace BondsmenScrapper
             _client.Headers[HttpRequestHeader.ContentType] = "application/x-www-form-urlencoded";
             _client.Headers[HttpRequestHeader.Host] = "www.hcdistrictclerk.com";
             _client.Headers[HttpRequestHeader.Cookie] = _cookie;
-            //_client.Headers.Add("DNT", "1");
-            //_client.Headers.Add(HttpRequestHeader.Referer, url);
-            //_client.Headers.Add("Upgrade-Insecure-Requests", "1");
-            //_client.Headers.Add(HttpRequestHeader.UserAgent, "Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:60.0) Gecko/20100101 Firefox/60.0");
-            //_client.Headers.Add(HttpRequestHeader.KeepAlive, "");
-            //_client.Headers.Add(HttpRequestHeader.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            //_client.Headers.Add(HttpRequestHeader.AcceptEncoding, "gzip, deflate, br");
-            //_client.Headers.Add(HttpRequestHeader.AcceptLanguage, "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3");
-            // var content = new FormUrlEncodedContent(values);
 
             var result = Encoding.ASCII.GetString(_client.UploadValues(url, values));
-            //File.WriteAllText($"C:\\temp\\{page}p.htm", result);
             return result;
         }
 
@@ -920,17 +922,17 @@ namespace BondsmenScrapper
             _client.Headers.Add(HttpRequestHeader.AcceptLanguage, "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3");
             // var content = new FormUrlEncodedContent(values);
 
-            var result = Encoding.ASCII.GetString(_client.UploadValues(loginUrl, values));
+            _client.UploadValues(loginUrl, values);
             _cookie = _client.ResponseHeaders["Set-Cookie"];
 
             return _cookie.Length > 500;
-            //var response = _client.PostAsync(loginUrl, content).GetAwaiter().GetResult();
-            //var result = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
         }
-
 
         private void btnStop_Click(object sender, EventArgs e)
         {
+            _started = false;
+            Log("Stopping...");
+
             Stop();
         }
 
@@ -939,8 +941,7 @@ namespace BondsmenScrapper
             btnStop.Enabled = false;
             btnStart.Enabled = true;
 
-            _started = false;
-            Log("Stopping...");
+            Log("Stopped");
         }
 
         private void Log(string message)

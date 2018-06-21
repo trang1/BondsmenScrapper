@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace BondsmenScrapper
@@ -45,6 +46,34 @@ namespace BondsmenScrapper
             if (DateTime.TryParse(str, out dt))
                 return dt;
             return null;
+        }
+        public static void ExecuteWithAttempts(this Action action,
+            int pauseAfterFailedAttempt,
+            Func<Exception, int, bool> stop,
+            Action<Exception, int> afterFailedAttemptAction = null)
+        {
+            int attemptsCounter = 0;
+            while (true)
+            {
+                attemptsCounter++;
+                try
+                {
+                    action();
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    afterFailedAttemptAction?.Invoke(exception, attemptsCounter);
+
+                    if (!stop(exception, attemptsCounter))
+                    {
+                        Thread.Sleep(pauseAfterFailedAttempt);
+                        continue;
+                    }
+
+                    throw;
+                }
+            }
         }
     }
 }
