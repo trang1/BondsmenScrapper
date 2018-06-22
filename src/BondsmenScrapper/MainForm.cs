@@ -47,6 +47,10 @@ namespace BondsmenScrapper
             btnStop.Enabled = true;
             btnStart.Enabled = false;
 
+            tbBondsman.Enabled = false;
+            tbUsername.Enabled = false;
+            tbPassword.Enabled = false;
+
             Task.Factory.StartNew(BeginScrapping);
             //Test();
             _started = true;
@@ -372,6 +376,8 @@ namespace BondsmenScrapper
 
                 new Action(() =>
                 {
+                    if(!_started) return;
+
                     if (_proxy != null)
                         htmlDoc = web.Load(loginUrl, "GET", _proxy, null);
                     else
@@ -381,7 +387,9 @@ namespace BondsmenScrapper
 
                 Thread.Sleep(2000);
 
+                if (!_started) return;
                 Log("Trying to login");
+
                 if (Login(htmlDoc, loginUrl))
                 {
                     Log("Login successful");
@@ -933,13 +941,16 @@ namespace BondsmenScrapper
             _started = false;
             Log("Stopping...");
 
-            Stop();
+            //Stop();
         }
 
         private void Stop()
         {
             btnStop.Enabled = false;
             btnStart.Enabled = true;
+            tbBondsman.Enabled = true;
+            tbUsername.Enabled = true;
+            tbPassword.Enabled = true;
 
             Log("Stopped");
         }
