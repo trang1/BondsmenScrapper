@@ -390,7 +390,16 @@ namespace BondsmenScrapper
                 if (!_started) return;
                 Log("Trying to login");
 
-                if (Login(htmlDoc, loginUrl))
+                var login = false;
+                new Action(() =>
+                {
+                    if (!_started) return;
+
+                    login = Login(htmlDoc, loginUrl);
+                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+
+                if (login)
                 {
                     Log("Login successful");
 
@@ -401,13 +410,26 @@ namespace BondsmenScrapper
                         return true;
                     };
                     Log("Loading search form");
-                    if (_proxy != null)
-                        htmlDoc = web.Load(url, "GET", _proxy, null);
-                    else
-                        htmlDoc = web.Load(url);
 
+                    new Action(() =>
+                    {
+                        if (!_started) return;
+
+                        if (_proxy != null)
+                            htmlDoc = web.Load(url, "GET", _proxy, null);
+                        else
+                            htmlDoc = web.Load(url);
+                        //todo:check if page is ok
+                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+                    
                     Log("Making a request");
-                    var result = Search(htmlDoc);
+
+                    var result = string.Empty;
+                    new Action(() =>
+                    {
+                        result = Search(htmlDoc);
+                        //todo:check if page is ok
+                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
 
 
                     if (!string.IsNullOrEmpty(result))
@@ -421,7 +443,15 @@ namespace BondsmenScrapper
                             Log($"Processing page = {page}");
 
                             if (page > 1)
-                                result = GetNextResultsPage(htmlDoc, page);
+                                new Action(() =>
+                                {
+                                    result = GetNextResultsPage(htmlDoc, page);
+                                    //todo:check if page is ok
+                                }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
+                                    (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+                            if (!_started)
+                                break;
 
                             htmlDoc = new HtmlDocument();
                             htmlDoc.LoadHtml(result);
@@ -431,15 +461,27 @@ namespace BondsmenScrapper
                                     "//table[@class='resultHeader contentwidth']/tr[not(@class='trResultHeader')]");
                             if (rows != null)
                             {
+                                // 'Type of action / Offense' field is not empty
                                 var filledRows =
                                     rows.Where(row => !string.IsNullOrEmpty(row.ChildNodes[11].InnerText.Trim()))
                                         .ToList();
+
+                                var processedRows = 0;
                                 foreach (var row in filledRows)
                                 {
-                                    ProcessTableRow(web, row);
+                                    if (ProcessTableRow(web, row))
+                                        processedRows++;
+
+                                    if (!_started)
+                                        break;
+
                                     Thread.Sleep(1000);
                                 }
-                                Log($"Processed {filledRows.Count} rows");
+                                Log($"Processed {processedRows} rows");
+                            }
+                            else
+                            {
+                                Log("No result rows found");
                             }
                             page++;
 
@@ -449,6 +491,10 @@ namespace BondsmenScrapper
                             Thread.Sleep((page%4 + 1)*1000);
 
                         } while (page <= lastPage);
+                    }
+                    else
+                    {
+                        Log("No result found");
                     }
                 }
                 else
@@ -471,9 +517,9 @@ namespace BondsmenScrapper
         {
             try
             {
-                var docc = new HtmlDocument();
-                docc.LoadHtml(result);
-                var lastPageLink = docc.DocumentNode.SelectSingleNode("//a[@title=' to Last Page ']").Attributes["href"];
+                var doc = new HtmlDocument();
+                doc.LoadHtml(result);
+                var lastPageLink = doc.DocumentNode.SelectSingleNode("//a[@title=' to Last Page ']").Attributes["href"];
                 var lastPage = int.Parse(lastPageLink.Value.Split('\'')[3]);
                 return lastPage;
             }
@@ -484,7 +530,7 @@ namespace BondsmenScrapper
             }
         }
 
-        private void ProcessTableRow(HtmlWeb web, HtmlNode row)
+        private bool ProcessTableRow(HtmlWeb web, HtmlNode row)
         {
             var link1 = row.ChildNodes[3].ChildNodes[1];
             var link= link1.GetAttributeValue("onclick", "");
@@ -493,12 +539,17 @@ namespace BondsmenScrapper
                 var query = link.Split('\'')[1];
                 var url = ConfigurationManager.AppSettings["CaseUrl"] + query;
 
-                HtmlDocument htmlDoc;
-                if (_proxy != null)
-                    htmlDoc = web.Load(url, "GET", _proxy, null);
-                else
-                    htmlDoc = web.Load(url);
+                var htmlDoc = new HtmlDocument();
+                new Action(() =>
+                {
+                    if (_proxy != null)
+                        htmlDoc = web.Load(url, "GET", _proxy, null);
+                    else
+                        htmlDoc = web.Load(url);
 
+                    //todo:check if page is ok
+                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+                
                 var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
                 var cause =
                     $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
@@ -518,11 +569,18 @@ namespace BondsmenScrapper
                             var caseDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCaseDetails']");
 
                             // No case - returning
-                            if (caseDetailsTable == null) return;
+                            if (caseDetailsTable == null) return false;
 
                             var existingCase = context.CaseSummaries.FirstOrDefault(c => c.CaseNumber == cause);
-
+                            
                             var isUpdate = existingCase != null;
+
+                            // If case exists and we shouldn't skip it then updating all linked entities
+                            if (isUpdate && bool.Parse(ConfigurationManager.AppSettings["SkipIfDuplicate"]))
+                            {
+                                Log($"Case {cause} is duplicated, skipping");
+                                return false;
+                            }
 
                             var caseSummary = existingCase ?? new CaseSummary();
 
@@ -761,6 +819,7 @@ namespace BondsmenScrapper
 
                             context.SaveChanges();
                         }
+                        return true;
                     }
                     catch (Exception e)
                     {
@@ -770,6 +829,7 @@ namespace BondsmenScrapper
                     }
                 }
             }
+            return false;
         }
 
         private string Search(HtmlDocument htmlDoc)
@@ -804,7 +864,6 @@ namespace BondsmenScrapper
 
             AddSearchFormValues(values);
 
-            //_client.Headers.Add(HttpRequestHeader.Connection,"keep-alive");
             _client.Headers[HttpRequestHeader.ContentType] = "application/x-www-form-urlencoded";
             _client.Headers[HttpRequestHeader.Host] = "www.hcdistrictclerk.com";
             _client.Headers[HttpRequestHeader.Cookie] = _cookie;
@@ -853,7 +912,9 @@ namespace BondsmenScrapper
 
         private void AddSearchFormValues(NameValueCollection values)
         {
+            // insert license #
             var formattedPairs = string.Format(searchFormValues, tbBondsman.Text);
+            // insert required search form values
             var pairs = formattedPairs.Split('&');
             foreach (var pair in pairs)
             {
@@ -872,6 +933,7 @@ namespace BondsmenScrapper
 
         private void AddNextPageFormValues(NameValueCollection values)
         {
+            // insert required form values to get the next page
             var pairs = nextPageFormValues.Split('&');
             foreach (var pair in pairs)
             {
@@ -916,10 +978,8 @@ namespace BondsmenScrapper
                 {"btnLoginImageButton", btnLoginValue}
             };
 
-            //_client.Headers.Add(HttpRequestHeader.Connection,"keep-alive");
             _client.Headers.Add(HttpRequestHeader.ContentType, "application/x-www-form-urlencoded");
             _client.Headers.Add(HttpRequestHeader.Host, "www.hcdistrictclerk.com");
-           // _client.Headers.Add("Connection", "keep-alive");
             _client.Headers.Add("DNT", "1");
             _client.Headers.Add(HttpRequestHeader.Referer, loginUrl);
             _client.Headers.Add("Upgrade-Insecure-Requests", "1");
@@ -928,20 +988,19 @@ namespace BondsmenScrapper
             _client.Headers.Add(HttpRequestHeader.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             _client.Headers.Add(HttpRequestHeader.AcceptEncoding, "gzip, deflate, br");
             _client.Headers.Add(HttpRequestHeader.AcceptLanguage, "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3");
-            // var content = new FormUrlEncodedContent(values);
-
+            
             _client.UploadValues(loginUrl, values);
             _cookie = _client.ResponseHeaders["Set-Cookie"];
 
+            // if login is successful, cookie length should be more than 500 symbols
             return _cookie.Length > 500;
         }
 
         private void btnStop_Click(object sender, EventArgs e)
         {
             _started = false;
+            btnStop.Enabled = false;
             Log("Stopping...");
-
-            //Stop();
         }
 
         private void Stop()
