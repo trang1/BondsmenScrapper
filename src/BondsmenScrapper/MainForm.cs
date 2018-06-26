@@ -532,34 +532,36 @@ namespace BondsmenScrapper
 
         private bool ProcessTableRow(HtmlWeb web, HtmlNode row)
         {
-            var link1 = row.ChildNodes[3].ChildNodes[1];
-            var link= link1.GetAttributeValue("onclick", "");
-            if (!string.IsNullOrEmpty(link))
+            try
             {
-                var query = link.Split('\'')[1];
-                var url = ConfigurationManager.AppSettings["CaseUrl"] + query;
-
-                var htmlDoc = new HtmlDocument();
-                new Action(() =>
+                var link1 = row.ChildNodes[3].ChildNodes[1];
+                var link = link1.GetAttributeValue("onclick", "");
+                if (!string.IsNullOrEmpty(link))
                 {
-                    if (_proxy != null)
-                        htmlDoc = web.Load(url, "GET", _proxy, null);
-                    else
-                        htmlDoc = web.Load(url);
+                    var query = link.Split('\'')[1];
+                    var url = ConfigurationManager.AppSettings["CaseUrl"] + query;
 
-                    //todo:check if page is ok
-                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
-                
-                var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
-                var cause =
-                    $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
-
-                var connectionString = ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
-
-                using (var connection = new MySqlConnection(connectionString))
-                {
-                    try
+                    var htmlDoc = new HtmlDocument();
+                    new Action(() =>
                     {
+                        if (_proxy != null)
+                            htmlDoc = web.Load(url, "GET", _proxy, null);
+                        else
+                            htmlDoc = web.Load(url);
+
+                        //todo:check if page is ok
+                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
+                        (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+                    var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
+                    var cause =
+                        $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
+
+                    var connectionString = ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
+
+                    using (var connection = new MySqlConnection(connectionString))
+                    {
+
                         using (var context = new DataContext(connection, false))
                         {
                             // Interception/SQL logging
@@ -572,7 +574,7 @@ namespace BondsmenScrapper
                             if (caseDetailsTable == null) return false;
 
                             var existingCase = context.CaseSummaries.FirstOrDefault(c => c.CaseNumber == cause);
-                            
+
                             var isUpdate = existingCase != null;
 
                             // If case exists and we shouldn't skip it then updating all linked entities
@@ -679,7 +681,8 @@ namespace BondsmenScrapper
 
                             if (isUpdate)
                             {
-                                var existingActivities = context.Activities.Where(a => a.CaseId == caseSummary.Id).ToList();
+                                var existingActivities =
+                                    context.Activities.Where(a => a.CaseId == caseSummary.Id).ToList();
                                 existingActivities.ForEach(a => context.Activities.Remove(a));
                             }
 
@@ -759,7 +762,8 @@ namespace BondsmenScrapper
 
                             if (isUpdate)
                             {
-                                var existingHistories = context.CriminalHistories.Where(h => h.CaseId == caseSummary.Id).ToList();
+                                var existingHistories =
+                                    context.CriminalHistories.Where(h => h.CaseId == caseSummary.Id).ToList();
                                 existingHistories.ForEach(h => context.CriminalHistories.Remove(h));
                             }
 
@@ -801,14 +805,16 @@ namespace BondsmenScrapper
                                 {
                                     var setting = new Setting();
 
-                                    setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim(), new CultureInfo("en-US"));
+                                    setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim(),
+                                        new CultureInfo("en-US"));
                                     setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
                                     setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
                                     setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();
                                     setting.Reason = settingsRow.ChildNodes[9].InnerText.Trim();
                                     setting.Results = settingsRow.ChildNodes[11].InnerText.Trim();
                                     setting.Defendant = settingsRow.ChildNodes[13].InnerText.Trim();
-                                    setting.FutureDate = settingsRow.ChildNodes[15].InnerText.Trim().ToDateTimeNullable();
+                                    setting.FutureDate =
+                                        settingsRow.ChildNodes[15].InnerText.Trim().ToDateTimeNullable();
                                     setting.Comments = settingsRow.ChildNodes[17].InnerText.Trim();
                                     setting.AttorneyAppearanceIndicator = settingsRow.ChildNodes[19].InnerText.Trim();
                                     setting.CaseId = caseSummary.Id;
@@ -821,13 +827,13 @@ namespace BondsmenScrapper
                         }
                         return true;
                     }
-                    catch (Exception e)
-                    {
-                        var error = "Error processing row. " + e.Message;
-                        Log(error);
-                        Trace.TraceError(error + e.StackTrace);
-                    }
                 }
+            }
+            catch (Exception e)
+            {
+                var error = "Error processing row. " + e.Message;
+                Log(error);
+                Trace.TraceError(error + e.StackTrace);
             }
             return false;
         }
@@ -1016,7 +1022,11 @@ namespace BondsmenScrapper
 
         private void Log(string message)
         {
-            BeginInvoke(new Action(() => tbLog.Text += $"{DateTime.Now:HH:mm:ss}: {message}\r\n"));
+            BeginInvoke(new Action(() =>
+            {
+                tbLog.AppendText($"{DateTime.Now:HH:mm:ss}: {message}\r\n");
+                tbLog.ScrollToCaret();
+            }));
 
             if (tbLog.Lines.Length > 100)
             {
