@@ -63,17 +63,17 @@ namespace BondsmenScrapper
             HtmlDocument htmlDoc;
 
             htmlDoc = web.Load("c:\\temp\\d.htm");
-
-            var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
-            var cause =
-                $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}"; 
-
-            var connectionString = ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
-
-            using (var connection = new MySqlConnection(connectionString))
+            try
             {
-                try
+                var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
+                var cause =
+                    $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
+
+                var connectionString = ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
+
+                using (var connection = new MySqlConnection(connectionString))
                 {
+
                     // DbConnection that is already opened
                     using (var context = new DataContext(connection, false))
                     {
@@ -150,7 +150,7 @@ namespace BondsmenScrapper
                             caseSummary.CpjCourtType = courtDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
                         }
 
-                        if(!isUpdate)
+                        if (!isUpdate)
                             context.CaseSummaries.Add(caseSummary);
 
                         context.SaveChanges();
@@ -267,7 +267,8 @@ namespace BondsmenScrapper
 
                         if (isUpdate)
                         {
-                            var existingHistories = context.CriminalHistories.Where(h => h.CaseId == caseSummary.Id).ToList();
+                            var existingHistories =
+                                context.CriminalHistories.Where(h => h.CaseId == caseSummary.Id).ToList();
                             existingHistories.ForEach(h => context.CriminalHistories.Remove(h));
                         }
 
@@ -309,7 +310,8 @@ namespace BondsmenScrapper
                             {
                                 var setting = new Setting();
 
-                                setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim(), new CultureInfo("en-US"));
+                                setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim(),
+                                    new CultureInfo("en-US"));
                                 setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
                                 setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
                                 setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();
@@ -325,19 +327,19 @@ namespace BondsmenScrapper
 
                             }
                         }
-                        
+
                         context.SaveChanges();
                     }
                 }
-                catch(Exception e)
-                {
-                    var error = "Error processing row. " + e.Message;
-                    Log(error);
-                    Trace.TraceError(error + e.StackTrace);
-                }
+            }
+            catch (Exception e)
+            {
+                var error = "Error processing row. " + e.Message;
+                Log(error);
+                Trace.TraceError(error + e.StackTrace);
             }
         }
-        
+
         private void BeginScrapping()
         {
             Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US", false);
@@ -471,7 +473,7 @@ namespace BondsmenScrapper
                                 {
                                     if (ProcessTableRow(web, row))
                                         processedRows++;
-
+                                    File.WriteAllText("c://temp//res.htm", htmlDoc.DocumentNode.InnerHtml);
                                     if (!_started)
                                         break;
 
@@ -553,6 +555,9 @@ namespace BondsmenScrapper
                     }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
                         (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
 
+                    File.WriteAllText($"{DateTime.Now.Hour}-{DateTime.Now.Minute}-{DateTime.Now.Second}.htm", htmlDoc.DocumentNode.InnerHtml);
+                    var res = _client.DownloadString(url);
+                    File.WriteAllText($"{DateTime.Now.Hour}-{DateTime.Now.Minute}-{DateTime.Now.Second}.htm", res);
                     var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
                     var cause =
                         $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
@@ -834,6 +839,7 @@ namespace BondsmenScrapper
                 var error = "Error processing row. " + e.Message;
                 Log(error);
                 Trace.TraceError(error + e.StackTrace);
+                File.WriteAllText($"{DateTime.Now.Hour}-{DateTime.Now.Minute}-{DateTime.Now.Second}.htm", row.InnerHtml);
             }
             return false;
         }
@@ -841,18 +847,18 @@ namespace BondsmenScrapper
         private string Search(HtmlDocument htmlDoc)
         {
             var eventTarget =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTTARGET']").GetAttributeValue("value", "");
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTTARGET']")?.GetAttributeValue("value", "");
 
             var eventArgument =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTARGUMENT']").GetAttributeValue("value", "");
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTARGUMENT']")?.GetAttributeValue("value", "");
             var viewState =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']").GetAttributeValue("value", "");
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']")?.GetAttributeValue("value", "");
             var viewStateGenerator =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']").GetAttributeValue("value", "");
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']")?.GetAttributeValue("value", "");
             var viewStateEncrypted =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEENCRYPTED']").GetAttributeValue("value", "");
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEENCRYPTED']")?.GetAttributeValue("value", "");
             var eventValidation =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']").GetAttributeValue("value", "");
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']")?.GetAttributeValue("value", "");
 
             var url = ConfigurationManager.AppSettings["Url"];
 
