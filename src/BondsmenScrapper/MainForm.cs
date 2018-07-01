@@ -62,7 +62,7 @@ namespace BondsmenScrapper
             var web = new HtmlWeb();
             HtmlDocument htmlDoc;
 
-            htmlDoc = web.Load("c:\\temp\\d.htm");
+            htmlDoc = web.Load(@"F:\Proj\BondsmenScrapper\src\BondsmenScrapper\bin\Debug\12-47-56.htm");
             try
             {
                 var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
@@ -457,7 +457,6 @@ namespace BondsmenScrapper
 
                             htmlDoc = new HtmlDocument();
                             htmlDoc.LoadHtml(result);
-
                             var rows =
                                 htmlDoc.DocumentNode.SelectNodes(
                                     "//table[@class='resultHeader contentwidth']/tr[not(@class='trResultHeader')]");
@@ -473,7 +472,7 @@ namespace BondsmenScrapper
                                 {
                                     if (ProcessTableRow(web, row))
                                         processedRows++;
-                                    File.WriteAllText("c://temp//res.htm", htmlDoc.DocumentNode.InnerHtml);
+                                    //File.WriteAllText("c://temp//res.htm", htmlDoc.DocumentNode.InnerHtml);
                                     if (!_started)
                                         break;
 
@@ -490,7 +489,7 @@ namespace BondsmenScrapper
                             if (!_started)
                                 break;
 
-                            Thread.Sleep((page%4 + 1)*1000);
+                            Thread.Sleep((page%4 + 5)*1000);
 
                         } while (page <= lastPage);
                     }
@@ -555,9 +554,6 @@ namespace BondsmenScrapper
                     }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
                         (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
 
-                    File.WriteAllText($"{DateTime.Now.Hour}-{DateTime.Now.Minute}-{DateTime.Now.Second}.htm", htmlDoc.DocumentNode.InnerHtml);
-                    var res = _client.DownloadString(url);
-                    File.WriteAllText($"{DateTime.Now.Hour}-{DateTime.Now.Minute}-{DateTime.Now.Second}.htm", res);
                     var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
                     var cause =
                         $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
@@ -567,6 +563,7 @@ namespace BondsmenScrapper
                     using (var connection = new MySqlConnection(connectionString))
                     {
 
+                        // DbConnection that is already opened
                         using (var context = new DataContext(connection, false))
                         {
                             // Interception/SQL logging
@@ -581,13 +578,6 @@ namespace BondsmenScrapper
                             var existingCase = context.CaseSummaries.FirstOrDefault(c => c.CaseNumber == cause);
 
                             var isUpdate = existingCase != null;
-
-                            // If case exists and we shouldn't skip it then updating all linked entities
-                            if (isUpdate && bool.Parse(ConfigurationManager.AppSettings["SkipIfDuplicate"]))
-                            {
-                                Log($"Case {cause} is duplicated, skipping");
-                                return false;
-                            }
 
                             var caseSummary = existingCase ?? new CaseSummary();
 
@@ -810,8 +800,7 @@ namespace BondsmenScrapper
                                 {
                                     var setting = new Setting();
 
-                                    setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim(),
-                                        new CultureInfo("en-US"));
+                                    setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim());
                                     setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
                                     setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
                                     setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();
@@ -825,13 +814,14 @@ namespace BondsmenScrapper
                                     setting.CaseId = caseSummary.Id;
 
                                     context.Settings.Add(setting);
+
                                 }
                             }
 
                             context.SaveChanges();
                         }
-                        return true;
                     }
+
                 }
             }
             catch (Exception e)

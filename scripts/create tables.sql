@@ -25,7 +25,7 @@ CREATE TABLE bondsmen.casesummaries(
   CPJAddress VARCHAR (512) DEFAULT NULL,
   CPJJudgeName VARCHAR (128) DEFAULT NULL,
   CPJCourtType VARCHAR (32) DEFAULT NULL,
-  CaseGUID VARCHAR (32) NOT NULL,
+  CaseGUID VARCHAR (64) NOT NULL,
   Id INT (11) NOT NULL AUTO_INCREMENT,
   PRIMARY KEY (Id)
 )
@@ -36,7 +36,7 @@ COLLATE utf8_general_ci;
 
 CREATE TABLE bondsmen.activities(
   CaseId INT (11) NOT NULL,
-  `Date` DATE NOT NULL,
+  `Date` DATE DEFAULT NULL,
   Type VARCHAR (64) NOT NULL,
   Description VARCHAR (512) DEFAULT NULL,
   SnuCfi VARCHAR (32) DEFAULT NULL,
@@ -44,7 +44,7 @@ CREATE TABLE bondsmen.activities(
   PRIMARY KEY (Id),
   INDEX activity_FK1 USING BTREE (CaseId),
   CONSTRAINT activity_FK1 FOREIGN KEY (CaseId)
-  REFERENCES bondsmen.casesummaries (Id)
+  REFERENCES bondsmen.casesummaries (Id) ON DELETE CASCADE
 )
 ENGINE = INNODB
 AUTO_INCREMENT = 46
@@ -61,7 +61,7 @@ CREATE TABLE bondsmen.bonds(
   PRIMARY KEY (Id),
   INDEX bond_FK1 USING BTREE (CaseId),
   CONSTRAINT bond_FK1 FOREIGN KEY (CaseId)
-  REFERENCES bondsmen.casesummaries (Id)
+  REFERENCES bondsmen.casesummaries (Id) ON DELETE CASCADE
 )
 ENGINE = INNODB
 AUTO_INCREMENT = 17
@@ -77,7 +77,7 @@ CREATE TABLE bondsmen.bookings(
   PRIMARY KEY (Id),
   INDEX booking_FK1 USING BTREE (CaseId),
   CONSTRAINT booking_FK1 FOREIGN KEY (CaseId)
-  REFERENCES bondsmen.casesummaries (Id)
+  REFERENCES bondsmen.casesummaries (Id) ON DELETE CASCADE
 )
 ENGINE = INNODB
 AUTO_INCREMENT = 7
@@ -99,7 +99,7 @@ CREATE TABLE bondsmen.criminalhistories(
   PRIMARY KEY (Id),
   INDEX criminal_history_FK1 USING BTREE (CaseId),
   CONSTRAINT criminal_history_FK1 FOREIGN KEY (CaseId)
-  REFERENCES bondsmen.casesummaries (Id)
+  REFERENCES bondsmen.casesummaries (Id) ON DELETE CASCADE
 )
 ENGINE = INNODB
 AUTO_INCREMENT = 3
@@ -119,7 +119,7 @@ CREATE TABLE bondsmen.holds(
   PRIMARY KEY (Id),
   INDEX hold_FK1 USING BTREE (CaseId),
   CONSTRAINT hold_FK1 FOREIGN KEY (CaseId)
-  REFERENCES bondsmen.casesummaries (Id)
+  REFERENCES bondsmen.casesummaries (Id) ON DELETE CASCADE
 )
 ENGINE = INNODB
 AUTO_INCREMENT = 1
@@ -142,7 +142,7 @@ CREATE TABLE bondsmen.settings(
   PRIMARY KEY (Id),
   INDEX setting_FK1 USING BTREE (CaseId),
   CONSTRAINT setting_FK1 FOREIGN KEY (CaseId)
-  REFERENCES bondsmen.casesummaries (Id)
+  REFERENCES bondsmen.casesummaries (Id) ON DELETE CASCADE
 )
 ENGINE = INNODB
 AUTO_INCREMENT = 5
