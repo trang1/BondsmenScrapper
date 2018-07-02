@@ -56,6 +56,779 @@ namespace BondsmenScrapper
             _started = true;
             Log("Starting...");
         }
+        
+        private void BeginScrapping()
+        {
+            // Avoid problems while parsing values
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US", false);
+
+            try
+            {
+                var loginUrl = ConfigurationManager.AppSettings.Get("LoginUrl");
+                var searchUrl = ConfigurationManager.AppSettings.Get("SearchUrl");
+                var proxy = ConfigurationManager.AppSettings.Get("ProxyIP");
+                var port = 0;
+
+                if(!string.IsNullOrEmpty(proxy))
+                    port = int.Parse(ConfigurationManager.AppSettings.Get("ProxyPort"));
+
+                if (!string.IsNullOrEmpty(proxy) && port > 0)
+                {
+                    _proxy = new WebProxy(proxy, port);
+                    _client.Proxy = _proxy;
+                    Log($"Using proxy {proxy}:{port}");
+                }
+
+                var web = new HtmlWeb();
+                HtmlDocument htmlDoc = null;
+                
+                web.PostResponse = delegate(HttpWebRequest request, HttpWebResponse response)
+                {
+                    // Save cookie for login
+                    var cookies = response.Headers["Set-Cookie"];
+                    if (cookies != null)
+                    {
+                        var sessionId = cookies.Split(';')[0];
+                        _client.Headers.Add(HttpRequestHeader.Cookie, sessionId + "; Login=");
+                    }
+                };
+
+                Log("Connecting to the website");
+
+                // Load login page
+                new Action(() =>
+                {
+                    if(!_started) return;
+
+                    if (_proxy != null)
+                        htmlDoc = web.Load(loginUrl, "GET", _proxy, null);
+                    else
+                        htmlDoc = web.Load(loginUrl);
+                    //todo:check if page is ok
+                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+                Thread.Sleep(2000);
+
+                if (!_started) return;
+                Log("Trying to login");
+
+                var login = false;
+                new Action(() =>
+                {
+                    if (!_started) return;
+
+                    login = Login(htmlDoc, loginUrl);
+                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+                // Login is successful
+                if (login)
+                {
+                    Log("Login successful");
+
+                    web = new HtmlWeb();
+                    web.PreRequest = delegate(HttpWebRequest request)
+                    {
+                        // Save cookie for future requests
+                        request.Headers["Cookie"] = _cookie;
+                        return true;
+                    };
+                    Log("Loading search form");
+
+                    //Load search form
+                    new Action(() =>
+                    {
+                        if (!_started) return;
+
+                        if (_proxy != null)
+                            htmlDoc = web.Load(searchUrl, "GET", _proxy, null);
+                        else
+                            htmlDoc = web.Load(searchUrl);
+                        //todo:check if page is ok
+                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+                    
+                    Thread.Sleep(1500);
+
+                    Log("Making a request");
+
+                    // Fill the form with bondsman license # and make a request
+                    var result = string.Empty;
+                    new Action(() =>
+                    {
+                        result = Search(htmlDoc);
+                        //todo:check if page is ok
+                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+
+                    if (!string.IsNullOrEmpty(result))
+                    {
+                        var lastPage = GetLastPage(result);
+                        Log($"Total pages count = {lastPage}");
+
+                        var page = 1;
+                        do
+                        {
+                            Log($"Processing page = {page}");
+
+                            if (page > 1)
+                                new Action(() =>
+                                {
+                                    // Move to the next results page
+                                    result = GetNextResultsPage(htmlDoc, page);
+                                    //todo:check if page is ok
+                                }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
+                                    (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+                            if (!_started)
+                                break;
+
+                            htmlDoc = new HtmlDocument();
+                            htmlDoc.LoadHtml(result);
+                            var rows = htmlDoc.DocumentNode.SelectNodes(
+                                    "//table[@class='resultHeader contentwidth']/tr[not(@class='trResultHeader')]");
+                            if (rows != null)
+                            {
+                                // 'Type of action / Offense' field is not empty
+                                var filledRows =
+                                    rows.Where(row => !string.IsNullOrEmpty(row.ChildNodes[11].InnerText.Trim()))
+                                        .ToList();
+
+                                var processedRows = 0;
+                                // Process rows
+                                foreach (var row in filledRows)
+                                {
+                                    try
+                                    {
+                                        // If case exists in DB, we should skip it or update
+                                        if (bool.Parse(ConfigurationManager.AppSettings["SkipIfDuplicate"]))
+                                        {
+                                            var caseNumber = row.ChildNodes[1].ChildNodes[0].InnerText.Replace(" ","").Trim();
+                                            var connectionString =
+                                                ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
+
+                                            using (var connection = new MySqlConnection(connectionString))
+                                            {
+                                                using (var context = new DataContext(connection, false))
+                                                {
+                                                    var existingCase =
+                                                        context.CaseSummaries.FirstOrDefault(c => c.CaseNumber == caseNumber);
+                                                    if (existingCase != null)
+                                                    {
+                                                        Log($"Case #{caseNumber} is duplicated, skipping.");
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Log("Error checking duplicate case. " + ex.Message);
+                                        Trace.TraceError(ex.Message + ex.StackTrace);
+                                    }
+
+                                    if (ProcessTableRow(web, row))
+                                        processedRows++;
+
+                                    if (!_started)
+                                        break;
+
+                                    // Pause before loading next row
+                                    Thread.Sleep((processedRows % 4 + 5) * 1000);
+
+                                    if (!_started)
+                                        break;
+
+                                }
+                                Log($"Processed {processedRows} rows");
+                            }
+                            else
+                            {
+                                Log("No result rows found");
+                            }
+                            page++;
+
+                            if (!_started)
+                                break;
+
+                        } while (page <= lastPage);
+                    }
+                    else
+                    {
+                        Log("No result found");
+                    }
+                }
+                else
+                {
+                    Log("Login failed");
+                }
+            }
+            catch (Exception e)
+            {
+                Log("An error occured. " + e.Message);
+                Trace.TraceError(e.Message + e.StackTrace);
+            }
+            finally
+            {
+                BeginInvoke(new Action(Stop));
+            }
+        }
+
+        /// <summary>
+        /// Gets last page # from results
+        /// </summary>
+        /// <param name="result"></param>
+        /// <returns></returns>
+        private static int GetLastPage(string result)
+        {
+            try
+            {
+                var doc = new HtmlDocument();
+                doc.LoadHtml(result);
+                var lastPageLink = doc.DocumentNode.SelectSingleNode("//a[@title=' to Last Page ']").Attributes["href"];
+                var lastPage = int.Parse(lastPageLink.Value.Split('\'')[3]);
+                return lastPage;
+            }
+            catch (Exception e)
+            {
+                Trace.TraceError(e.Message + e.StackTrace);
+                return 1;
+            }
+        }
+
+        /// <summary>
+        /// Parse tables and save case data
+        /// </summary>
+        /// <param name="web"></param>
+        /// <param name="row"></param>
+        /// <returns></returns>
+        private bool ProcessTableRow(HtmlWeb web, HtmlNode row)
+        {
+            try
+            {
+                var link1 = row.ChildNodes[3].ChildNodes[1];
+                var link = link1.GetAttributeValue("onclick", "");
+                if (!string.IsNullOrEmpty(link))
+                {
+                    var query = link.Split('\'')[1];
+                    var url = ConfigurationManager.AppSettings["CaseUrl"] + query;
+
+                    var htmlDoc = new HtmlDocument();
+                    new Action(() =>
+                    {
+                        if (_proxy != null)
+                            htmlDoc = web.Load(url, "GET", _proxy, null);
+                        else
+                            htmlDoc = web.Load(url);
+
+                        //todo:check if page is ok
+                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
+                        (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
+
+                    var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
+                    var cause =
+                        $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
+                    var connectionString = ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
+
+                    using (var connection = new MySqlConnection(connectionString))
+                    {
+
+                        // DbConnection that is already opened
+                        using (var context = new DataContext(connection, false))
+                        {
+                            // Interception/SQL logging
+                            //context.Database.Log = Console.WriteLine;
+
+                            // *********************    CASE DETAILS **************************
+                            var caseDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCaseDetails']");
+
+                            // No case - returning
+                            if (caseDetailsTable == null) return false;
+
+                            var existingCase = context.CaseSummaries.FirstOrDefault(c => c.CaseNumber == cause);
+
+                            var isUpdate = existingCase != null;
+                            Log($"Processing case# {cause}. Case {(isUpdate ? "exists, updating" : "doesn't exist, inserting")}.");
+                    
+                            var caseSummary = existingCase ?? new CaseSummary();
+
+                            caseSummary.CaseNumber = cause;
+                            caseSummary.FileDate = DateTime.Parse(caseDetailsTable.ChildNodes[3].ChildNodes[3].InnerText);
+                            caseSummary.CaseStatus = caseDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
+                            caseSummary.Offense = caseDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
+                            caseSummary.LastInstrumentFiled = caseDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
+                            caseSummary.Disposition = caseDetailsTable.ChildNodes[19].ChildNodes[3].InnerText;
+                            caseSummary.CompletionDate =
+                                caseDetailsTable.ChildNodes[23].ChildNodes[3].InnerText.ToDateTimeNullable();
+                            caseSummary.DefendantStatus = caseDetailsTable.ChildNodes[27].ChildNodes[3].InnerText;
+                            caseSummary.BondAmount = caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText;
+                            caseSummary.SettingDate =
+                                caseDetailsTable.ChildNodes[35].ChildNodes[3].InnerText.ToDateTimeNullable();
+                            caseSummary.CaseGuid = Guid.NewGuid().ToString();
+
+                            // *********************** DEFENDANT DETAILS  *************************
+                            var defDetailsTable =
+                                htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblDefendantDetails']");
+                            if (defDetailsTable != null)
+                            {
+                                var defTablePart1 = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1];
+                                caseSummary.DefendantRaceSex =
+                                    defTablePart1.ChildNodes[1].ChildNodes[3].InnerText;
+                                caseSummary.DefendantEyes =
+                                    defTablePart1.ChildNodes[5].ChildNodes[3].InnerText;
+                                caseSummary.DefendantSkin =
+                                    defTablePart1.ChildNodes[9].ChildNodes[3].InnerText;
+                                caseSummary.DefendantDob =
+                                    defTablePart1.ChildNodes[13].ChildNodes[3].InnerText.ToDateTimeNullable();
+                                caseSummary.DefendantUsCitizen =
+                                    defTablePart1.ChildNodes[17].ChildNodes[3].InnerText;
+
+                                var defTablePart2 = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1];
+                                caseSummary.DefendantHeightWeight =
+                                    defTablePart2.ChildNodes[1].ChildNodes[3].InnerText;
+                                caseSummary.DefendantHair =
+                                    defTablePart2.ChildNodes[5].ChildNodes[3].InnerText;
+                                caseSummary.DefendantBuild =
+                                    defTablePart2.ChildNodes[9].ChildNodes[3].InnerText;
+                                caseSummary.DefendantInCustody =
+                                    defTablePart2.ChildNodes[13].ChildNodes[3].InnerText;
+                                caseSummary.DefendantPlaceOfBirth =
+                                    defTablePart2.ChildNodes[17].ChildNodes[3].InnerText;
+
+                                caseSummary.DefendantAddress = defDetailsTable.ChildNodes[5].ChildNodes[3].InnerText;
+                                caseSummary.DefendantMarkings = defDetailsTable.ChildNodes[9].ChildNodes[3].InnerText;
+                            }
+
+                            // ****************************  CURRENT PRESIDING JUDGE ***********************
+                            var courtDetailsTable =
+                                htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCourtDetails']");
+                            if (courtDetailsTable != null)
+                            {
+                                caseSummary.CpjCurrentCourt = courtDetailsTable.ChildNodes[3].ChildNodes[3].InnerText;
+                                caseSummary.CpjAddress = courtDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
+                                caseSummary.CpjJudgeName = courtDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
+                                caseSummary.CpjCourtType = courtDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
+                            }
+
+                            if (!isUpdate)
+                                context.CaseSummaries.Add(caseSummary);
+
+                            context.SaveChanges();
+
+                            // ***********************************   BONDS  ***********************************
+                            var bondsRows = htmlDoc.DocumentNode.SelectNodes
+                                ("//table[@id='tblBonds']/tr[@style='font-size:12px; ']");
+
+                            if (isUpdate)
+                            {
+                                var existingBonds = context.Bonds.Where(b => b.CaseId == caseSummary.Id).ToList();
+                                existingBonds.ForEach(b => context.Bonds.Remove(b));
+                            }
+
+                            if (bondsRows != null)
+                            {
+                                foreach (var bondsRow in bondsRows)
+                                {
+                                    var bond = new Bond();
+
+                                    bond.Date = DateTime.Parse(bondsRow.ChildNodes[1].InnerText);
+                                    bond.Type = bondsRow.ChildNodes[3].InnerText;
+                                    bond.Description = bondsRow.ChildNodes[5].InnerText;
+                                    bond.Snu = bondsRow.ChildNodes[7].InnerText;
+                                    bond.CaseId = caseSummary.Id;
+
+                                    context.Bonds.Add(bond);
+                                }
+                            }
+
+                            // ***********************************   ACTIVITIES  ***********************************
+                            var activitiesRows = htmlDoc.DocumentNode.SelectNodes(
+                                "//table[@id='tblActivities']/tr[@style='font-size:12px; ']");
+
+                            if (isUpdate)
+                            {
+                                var existingActivities =
+                                    context.Activities.Where(a => a.CaseId == caseSummary.Id).ToList();
+                                existingActivities.ForEach(a => context.Activities.Remove(a));
+                            }
+
+                            if (activitiesRows != null)
+                            {
+                                foreach (var activitiesRow in activitiesRows)
+                                {
+                                    var activity = new Activity();
+
+                                    activity.Date = activitiesRow.ChildNodes[1].InnerText.ToDateTimeNullable();
+                                    activity.Type = activitiesRow.ChildNodes[3].InnerText;
+                                    activity.Description = activitiesRow.ChildNodes[5].InnerText;
+                                    activity.SnuCfi = activitiesRow.ChildNodes[7].InnerText;
+                                    activity.CaseId = caseSummary.Id;
+
+                                    context.Activities.Add(activity);
+                                }
+                            }
+
+                            // ***********************************   BOOKINGS  ***********************************
+                            var bookingsRows = htmlDoc.DocumentNode.SelectNodes(
+                                "//table[@id='tblBookings']/tr[@style='font-size:12px; ']");
+
+                            if (isUpdate)
+                            {
+                                var existingBookings = context.Bookings.Where(b => b.CaseId == caseSummary.Id).ToList();
+                                existingBookings.ForEach(b => context.Bookings.Remove(b));
+                            }
+
+                            if (bookingsRows != null)
+                            {
+                                foreach (var bookingsRow in bookingsRows)
+                                {
+                                    var booking = new Booking();
+
+                                    booking.ArrestDate = bookingsRow.ChildNodes[1].InnerText.ToDateTimeNullable();
+                                    booking.ArrestLocation = bookingsRow.ChildNodes[3].InnerText;
+                                    booking.BookingDate = bookingsRow.ChildNodes[5].InnerText.ToDateTimeNullable();
+                                    booking.CaseId = caseSummary.Id;
+
+                                    context.Bookings.Add(booking);
+                                }
+                            }
+
+                            // ***********************************   HOLDS  ***********************************
+                            var holdsRows =
+                                htmlDoc.DocumentNode.SelectNodes("//table[@id='tblHolds']/tr[@style='font-size:12px; ']");
+
+                            if (isUpdate)
+                            {
+                                var existingHolds = context.Holds.Where(h => h.CaseId == caseSummary.Id).ToList();
+                                existingHolds.ForEach(h => context.Holds.Remove(h));
+                            }
+
+                            if (holdsRows != null)
+                            {
+                                foreach (var holdsRow in holdsRows)
+                                {
+                                    var hold = new Hold();
+
+                                    hold.AgencyPlacingHold = holdsRow.ChildNodes[1].InnerText;
+                                    hold.AgencyName = holdsRow.ChildNodes[3].InnerText;
+                                    hold.WarrantNumber = holdsRow.ChildNodes[5].InnerText;
+                                    hold.BondAmount = holdsRow.ChildNodes[7].InnerText;
+                                    hold.Offense = holdsRow.ChildNodes[9].InnerText;
+                                    hold.PlacedDate = holdsRow.ChildNodes[11].InnerText.ToDateTimeNullable();
+                                    hold.LiftedDate = holdsRow.ChildNodes[13].InnerText.ToDateTimeNullable();
+                                    hold.CaseId = caseSummary.Id;
+
+                                    context.Holds.Add(hold);
+                                }
+                            }
+
+                            // ***********************************   CRIMINAL HISTORY  ***********************************
+                            var crimHistRows = htmlDoc.DocumentNode.SelectNodes(
+                                "//table[@id='tblCrimHist']/tr[@style='font-size:11px; vertical-align:top; ']");
+
+                            if (isUpdate)
+                            {
+                                var existingHistories =
+                                    context.CriminalHistories.Where(h => h.CaseId == caseSummary.Id).ToList();
+                                existingHistories.ForEach(h => context.CriminalHistories.Remove(h));
+                            }
+
+                            if (crimHistRows != null)
+                            {
+                                foreach (var crimHistRow in crimHistRows)
+                                {
+                                    var criminalHistory = new CriminalHistory();
+
+                                    criminalHistory.CaseNumStatus = crimHistRow.ChildNodes[1].InnerText.Trim();
+                                    criminalHistory.Offense = crimHistRow.ChildNodes[3].InnerText.Trim();
+                                    criminalHistory.DateFiledBooked = crimHistRow.ChildNodes[5].InnerText.Trim();
+                                    criminalHistory.Court = crimHistRow.ChildNodes[7].InnerText.Trim();
+                                    criminalHistory.DefendantStatus = crimHistRow.ChildNodes[9].InnerText.Trim();
+                                    criminalHistory.Disposition = crimHistRow.ChildNodes[11].InnerText.Trim();
+                                    criminalHistory.BondAmount = crimHistRow.ChildNodes[13].InnerText.Trim();
+                                    criminalHistory.Offense = crimHistRow.ChildNodes[15].InnerText.Trim();
+                                    criminalHistory.NextSetting =
+                                        crimHistRow.ChildNodes[17].InnerText.Trim().ToDateTimeNullable();
+                                    criminalHistory.CaseId = caseSummary.Id;
+
+                                    context.CriminalHistories.Add(criminalHistory);
+                                }
+                            }
+
+                            // ***********************************   SETTINGS  ***********************************
+                            var settingsRows = htmlDoc.DocumentNode.SelectNodes(
+                                "//table[@id='tblSettings']/tr[@style='font-size:12px; ']");
+
+                            if (isUpdate)
+                            {
+                                var existingSettings = context.Settings.Where(s => s.CaseId == caseSummary.Id).ToList();
+                                existingSettings.ForEach(s => context.Settings.Remove(s));
+                            }
+
+                            if (settingsRows != null)
+                            {
+                                foreach (var settingsRow in settingsRows)
+                                {
+                                    var setting = new Setting();
+
+                                    setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim());
+                                    setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
+                                    setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
+                                    setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();
+                                    setting.Reason = settingsRow.ChildNodes[9].InnerText.Trim();
+                                    setting.Results = settingsRow.ChildNodes[11].InnerText.Trim();
+                                    setting.Defendant = settingsRow.ChildNodes[13].InnerText.Trim();
+                                    setting.FutureDate =
+                                        settingsRow.ChildNodes[15].InnerText.Trim().ToDateTimeNullable();
+                                    setting.Comments = settingsRow.ChildNodes[17].InnerText.Trim();
+                                    setting.AttorneyAppearanceIndicator = settingsRow.ChildNodes[19].InnerText.Trim();
+                                    setting.CaseId = caseSummary.Id;
+
+                                    context.Settings.Add(setting);
+
+                                }
+                            }
+
+                            context.SaveChanges();
+                        }
+                    }
+
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                var error = "Error processing row. " + e.Message;
+                Log(error);
+                Trace.TraceError(error + e.StackTrace);
+                File.WriteAllText($"{DateTime.Now.Hour}-{DateTime.Now.Minute}-{DateTime.Now.Second}.htm", row.InnerHtml);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Makes a search request to the website
+        /// </summary>
+        /// <param name="htmlDoc"></param>
+        /// <returns></returns>
+        private string Search(HtmlDocument htmlDoc)
+        {
+            var eventTarget =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTTARGET']")?.GetAttributeValue("value", "");
+
+            var eventArgument =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTARGUMENT']")?.GetAttributeValue("value", "");
+            var viewState =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']")?.GetAttributeValue("value", "");
+            var viewStateGenerator =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']")?.GetAttributeValue("value", "");
+            var viewStateEncrypted =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEENCRYPTED']")?.GetAttributeValue("value", "");
+            var eventValidation =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']")?.GetAttributeValue("value", "");
+
+            var url = ConfigurationManager.AppSettings["Url"];
+
+            var values = new NameValueCollection()
+            {
+                {"ctl00_ctl00_ctl00_ContentPlaceHolder1_ContentPlaceHolder2_ContentPlaceHolder2_tabSearch_ClientState", "{\"ActiveTabIndex\":1,\"TabState\":[true,true,true,true,true,true,true,true]}"},
+                {"__EVENTTARGET", eventTarget},
+                {"__EVENTARGUMENT", eventArgument},
+                {"__LASTFOCUS", ""},
+                {"__VIEWSTATE", viewState},
+                {"__VIEWSTATEGENERATOR", viewStateGenerator},
+                {"__VIEWSTATEENCRYPTED", viewStateEncrypted},
+                {"__EVENTVALIDATION", eventValidation}
+            };
+
+            AddSearchFormValues(values);
+
+            _client.Headers[HttpRequestHeader.ContentType] = "application/x-www-form-urlencoded";
+            _client.Headers[HttpRequestHeader.Host] = "www.hcdistrictclerk.com";
+            _client.Headers[HttpRequestHeader.Cookie] = _cookie;
+
+            var result = Encoding.ASCII.GetString(_client.UploadValues(url, values));
+            return result;
+        }
+
+        /// <summary>
+        /// Load next results page
+        /// </summary>
+        /// <param name="htmlDoc"></param>
+        /// <param name="page"></param>
+        /// <returns></returns>
+        private string GetNextResultsPage(HtmlDocument htmlDoc, int page)
+        {
+            var eventTarget = "ctl00$ctl00$ctl00$ContentPlaceHolder1$ContentPlaceHolder2$ContentPlaceHolder2$pager1";
+            var eventArgument = page.ToString();
+
+            var viewState =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']").GetAttributeValue("value", "");
+            var viewStateGenerator =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']").GetAttributeValue("value", "");
+            var viewStateEncrypted =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEENCRYPTED']").GetAttributeValue("value", "");
+            var eventValidation =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']").GetAttributeValue("value", "");
+
+            var url = ConfigurationManager.AppSettings["Url"];
+
+            var values = new NameValueCollection()
+            {
+                {"__EVENTTARGET", eventTarget},
+                {"__EVENTARGUMENT", eventArgument},
+                {"__VIEWSTATE", viewState},
+                {"__VIEWSTATEGENERATOR", viewStateGenerator},
+                {"__VIEWSTATEENCRYPTED", viewStateEncrypted},
+                {"__EVENTVALIDATION", eventValidation}
+            };
+
+            AddNextPageFormValues(values);
+
+            //_client.Headers.Add(HttpRequestHeader.Connection,"keep-alive");
+            _client.Headers[HttpRequestHeader.ContentType] = "application/x-www-form-urlencoded";
+            _client.Headers[HttpRequestHeader.Host] = "www.hcdistrictclerk.com";
+            _client.Headers[HttpRequestHeader.Cookie] = _cookie;
+
+            var result = Encoding.ASCII.GetString(_client.UploadValues(url, values));
+            return result;
+        }
+
+        /// <summary>
+        /// Insert required values for search request
+        /// </summary>
+        /// <param name="values"></param>
+        private void AddSearchFormValues(NameValueCollection values)
+        {
+            // insert license #
+            var formattedPairs = string.Format(searchFormValues, tbBondsman.Text);
+            // insert required search form values
+            var pairs = formattedPairs.Split('&');
+            foreach (var pair in pairs)
+            {
+                try
+                {
+                    var key = pair.Split('=')[0];
+                    var value = pair.Split('=')[1];
+                    values.Add(key, value);
+                }
+                catch (Exception e)
+                {
+                    Trace.TraceError(e.Message + e.StackTrace);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Insert required values for next page request
+        /// </summary>
+        /// <param name="values"></param>
+        private void AddNextPageFormValues(NameValueCollection values)
+        {
+            // insert required form values to get the next page
+            var pairs = nextPageFormValues.Split('&');
+            foreach (var pair in pairs)
+            {
+                try
+                {
+                    var key = pair.Split('=')[0];
+                    var value = pair.Split('=')[1];
+                    values.Add(key, value);
+                }
+                catch (Exception e)
+                {
+                    Trace.TraceError(e.Message + e.StackTrace);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Login to the website
+        /// </summary>
+        /// <param name="htmlDoc"></param>
+        /// <param name="loginUrl"></param>
+        /// <returns></returns>
+        private bool Login(HtmlDocument htmlDoc, string loginUrl)
+        {
+            var eventTarget =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTTARGET']").GetAttributeValue("value", "");
+
+            var eventArgument =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTARGUMENT']").GetAttributeValue("value", "");
+            var viewState =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']").GetAttributeValue("value", "");
+            var viewStateGenerator =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']").GetAttributeValue("value", "");
+            var eventValidation =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']").GetAttributeValue("value", "");
+            var btnLoginValue =
+                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='btnLoginImageButton']").GetAttributeValue("value", "");
+
+            var values = new NameValueCollection()
+            {
+                {"__EVENTTARGET", eventTarget},
+                {"__EVENTARGUMENT", eventArgument},
+                {"__VIEWSTATE", viewState},
+                {"__VIEWSTATEGENERATOR", viewStateGenerator},
+                {"__EVENTVALIDATION", eventValidation},
+                {"txtUserName", tbUsername.Text},
+                {"txtPassword", tbPassword.Text},
+                {"btnLoginImageButton", btnLoginValue}
+            };
+
+            _client.Headers.Add(HttpRequestHeader.ContentType, "application/x-www-form-urlencoded");
+            _client.Headers.Add(HttpRequestHeader.Host, "www.hcdistrictclerk.com");
+            _client.Headers.Add("DNT", "1");
+            _client.Headers.Add(HttpRequestHeader.Referer, loginUrl);
+            _client.Headers.Add("Upgrade-Insecure-Requests", "1");
+            _client.Headers.Add(HttpRequestHeader.UserAgent, "Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:60.0) Gecko/20100101 Firefox/60.0");
+            _client.Headers.Add(HttpRequestHeader.KeepAlive,"");
+            _client.Headers.Add(HttpRequestHeader.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            _client.Headers.Add(HttpRequestHeader.AcceptEncoding, "gzip, deflate, br");
+            _client.Headers.Add(HttpRequestHeader.AcceptLanguage, "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3");
+            
+            _client.UploadValues(loginUrl, values);
+            _cookie = _client.ResponseHeaders["Set-Cookie"];
+
+            // if login is successful, cookie length should be more than 500 symbols
+            return _cookie.Length > 500;
+        }
+
+        private void btnStop_Click(object sender, EventArgs e)
+        {
+            _started = false;
+            btnStop.Enabled = false;
+            Log("Stopping...");
+        }
+
+        private void Stop()
+        {
+            btnStop.Enabled = false;
+            btnStart.Enabled = true;
+            tbBondsman.Enabled = true;
+            tbUsername.Enabled = true;
+            tbPassword.Enabled = true;
+
+            Log("Stopped");
+        }
+
+        private void Log(string message)
+        {
+            // Add message in the main thread
+            BeginInvoke(new Action(() =>
+            {
+                tbLog.AppendText($"{DateTime.Now:HH:mm:ss}: {message}\r\n");
+                tbLog.ScrollToCaret();
+            }));
+
+            if (tbLog.Lines.Length > 1000)
+            {
+                var file = Path.Combine(Application.StartupPath, $"{DateTime.Now:yyyy-MM-dd_HH-mm} .log");
+                File.WriteAllText(file, tbLog.Text);
+
+                BeginInvoke(new Action(() => tbLog.Text = string.Empty));
+                Log("Log flushed. All data saved to " + file);
+            }
+        }
 
         void Test()
         {
@@ -340,701 +1113,6 @@ namespace BondsmenScrapper
             }
         }
 
-        private void BeginScrapping()
-        {
-            Thread.CurrentThread.CurrentCulture = new CultureInfo("en-US", false);
-
-            try
-            {
-                var loginUrl = ConfigurationManager.AppSettings.Get("LoginUrl");
-                var url = ConfigurationManager.AppSettings.Get("Url");
-                var proxy = ConfigurationManager.AppSettings.Get("ProxyIP");
-                var port = 0;
-
-                if(!string.IsNullOrEmpty(proxy))
-                    port = int.Parse(ConfigurationManager.AppSettings.Get("ProxyPort"));
-
-                if (!string.IsNullOrEmpty(proxy) && port > 0)
-                {
-                    _proxy = new WebProxy(proxy, port);
-                    _client.Proxy = _proxy;
-                    Log($"Using proxy {proxy}:{port}");
-                }
-
-                var web = new HtmlWeb();
-                HtmlDocument htmlDoc = null;
-                
-                web.PostResponse = delegate(HttpWebRequest request, HttpWebResponse response)
-                {
-                    var cookies = response.Headers["Set-Cookie"];
-                    if (cookies != null)
-                    {
-                        var sessionId = cookies.Split(';')[0];
-                        _client.Headers.Add(HttpRequestHeader.Cookie, sessionId + "; Login=");
-                    }
-                };
-
-                Log("Connecting to the website");
-
-                new Action(() =>
-                {
-                    if(!_started) return;
-
-                    if (_proxy != null)
-                        htmlDoc = web.Load(loginUrl, "GET", _proxy, null);
-                    else
-                        htmlDoc = web.Load(loginUrl);
-                    //todo:check if page is ok
-                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
-
-                Thread.Sleep(2000);
-
-                if (!_started) return;
-                Log("Trying to login");
-
-                var login = false;
-                new Action(() =>
-                {
-                    if (!_started) return;
-
-                    login = Login(htmlDoc, loginUrl);
-                }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
-
-
-                if (login)
-                {
-                    Log("Login successful");
-
-                    web = new HtmlWeb();
-                    web.PreRequest = delegate(HttpWebRequest request)
-                    {
-                        request.Headers["Cookie"] = _cookie;
-                        return true;
-                    };
-                    Log("Loading search form");
-
-                    new Action(() =>
-                    {
-                        if (!_started) return;
-
-                        if (_proxy != null)
-                            htmlDoc = web.Load(url, "GET", _proxy, null);
-                        else
-                            htmlDoc = web.Load(url);
-                        //todo:check if page is ok
-                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
-                    
-                    Log("Making a request");
-
-                    var result = string.Empty;
-                    new Action(() =>
-                    {
-                        result = Search(htmlDoc);
-                        //todo:check if page is ok
-                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5, (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
-
-
-                    if (!string.IsNullOrEmpty(result))
-                    {
-                        var lastPage = GetLastPage(result);
-                        Log($"Total pages count = {lastPage}");
-
-                        var page = 1;
-                        do
-                        {
-                            Log($"Processing page = {page}");
-
-                            if (page > 1)
-                                new Action(() =>
-                                {
-                                    result = GetNextResultsPage(htmlDoc, page);
-                                    //todo:check if page is ok
-                                }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
-                                    (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
-
-                            if (!_started)
-                                break;
-
-                            htmlDoc = new HtmlDocument();
-                            htmlDoc.LoadHtml(result);
-                            var rows =
-                                htmlDoc.DocumentNode.SelectNodes(
-                                    "//table[@class='resultHeader contentwidth']/tr[not(@class='trResultHeader')]");
-                            if (rows != null)
-                            {
-                                // 'Type of action / Offense' field is not empty
-                                var filledRows =
-                                    rows.Where(row => !string.IsNullOrEmpty(row.ChildNodes[11].InnerText.Trim()))
-                                        .ToList();
-
-                                var processedRows = 0;
-                                foreach (var row in filledRows)
-                                {
-                                    if (ProcessTableRow(web, row))
-                                        processedRows++;
-                                    //File.WriteAllText("c://temp//res.htm", htmlDoc.DocumentNode.InnerHtml);
-                                    if (!_started)
-                                        break;
-
-                                    Thread.Sleep(1000);
-                                }
-                                Log($"Processed {processedRows} rows");
-                            }
-                            else
-                            {
-                                Log("No result rows found");
-                            }
-                            page++;
-
-                            if (!_started)
-                                break;
-
-                            Thread.Sleep((page%4 + 5)*1000);
-
-                        } while (page <= lastPage);
-                    }
-                    else
-                    {
-                        Log("No result found");
-                    }
-                }
-                else
-                {
-                    Log("Login failed");
-                }
-            }
-            catch (Exception e)
-            {
-                Log("An error occured. " + e.Message);
-                Trace.TraceError(e.Message + e.StackTrace);
-            }
-            finally
-            {
-                BeginInvoke(new Action(Stop));
-            }
-        }
-
-        private static int GetLastPage(string result)
-        {
-            try
-            {
-                var doc = new HtmlDocument();
-                doc.LoadHtml(result);
-                var lastPageLink = doc.DocumentNode.SelectSingleNode("//a[@title=' to Last Page ']").Attributes["href"];
-                var lastPage = int.Parse(lastPageLink.Value.Split('\'')[3]);
-                return lastPage;
-            }
-            catch (Exception e)
-            {
-                Trace.TraceError(e.Message + e.StackTrace);
-                return 1;
-            }
-        }
-
-        private bool ProcessTableRow(HtmlWeb web, HtmlNode row)
-        {
-            try
-            {
-                var link1 = row.ChildNodes[3].ChildNodes[1];
-                var link = link1.GetAttributeValue("onclick", "");
-                if (!string.IsNullOrEmpty(link))
-                {
-                    var query = link.Split('\'')[1];
-                    var url = ConfigurationManager.AppSettings["CaseUrl"] + query;
-
-                    var htmlDoc = new HtmlDocument();
-                    new Action(() =>
-                    {
-                        if (_proxy != null)
-                            htmlDoc = web.Load(url, "GET", _proxy, null);
-                        else
-                            htmlDoc = web.Load(url);
-
-                        //todo:check if page is ok
-                    }).ExecuteWithAttempts(1000, (exception, i) => i > 5,
-                        (exception, i) => Log($"Error: {exception.Message}. Retrying..."));
-
-                    var caseRow = htmlDoc.DocumentNode.SelectSingleNode("//table").ChildNodes[5];
-                    var cause =
-                        $"{new string(caseRow.ChildNodes[3].InnerText.Where(char.IsDigit).ToArray())}-{new string(caseRow.ChildNodes[5].InnerText.Where(char.IsDigit).ToArray())}";
-
-                    var connectionString = ConfigurationManager.ConnectionStrings["ConnString"].ConnectionString;
-
-                    using (var connection = new MySqlConnection(connectionString))
-                    {
-
-                        // DbConnection that is already opened
-                        using (var context = new DataContext(connection, false))
-                        {
-                            // Interception/SQL logging
-                            //context.Database.Log = Console.WriteLine;
-
-                            // *********************    CASE DETAILS **************************
-                            var caseDetailsTable = htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCaseDetails']");
-
-                            // No case - returning
-                            if (caseDetailsTable == null) return false;
-
-                            var existingCase = context.CaseSummaries.FirstOrDefault(c => c.CaseNumber == cause);
-
-                            var isUpdate = existingCase != null;
-
-                            var caseSummary = existingCase ?? new CaseSummary();
-
-                            caseSummary.CaseNumber = cause;
-                            caseSummary.FileDate = DateTime.Parse(caseDetailsTable.ChildNodes[3].ChildNodes[3].InnerText);
-                            caseSummary.CaseStatus = caseDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
-                            caseSummary.Offense = caseDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
-                            caseSummary.LastInstrumentFiled = caseDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
-                            caseSummary.Disposition = caseDetailsTable.ChildNodes[19].ChildNodes[3].InnerText;
-                            caseSummary.CompletionDate =
-                                caseDetailsTable.ChildNodes[23].ChildNodes[3].InnerText.ToDateTimeNullable();
-                            caseSummary.DefendantStatus = caseDetailsTable.ChildNodes[27].ChildNodes[3].InnerText;
-                            caseSummary.BondAmount = caseDetailsTable.ChildNodes[31].ChildNodes[3].InnerText;
-                            caseSummary.SettingDate =
-                                caseDetailsTable.ChildNodes[35].ChildNodes[3].InnerText.ToDateTimeNullable();
-                            caseSummary.CaseGuid = Guid.NewGuid().ToString();
-
-                            // *********************** DEFENDANT DETAILS  *************************
-                            var defDetailsTable =
-                                htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblDefendantDetails']");
-                            if (defDetailsTable != null)
-                            {
-                                var defTablePart1 = defDetailsTable.ChildNodes[3].ChildNodes[1].ChildNodes[1];
-                                caseSummary.DefendantRaceSex =
-                                    defTablePart1.ChildNodes[1].ChildNodes[3].InnerText;
-                                caseSummary.DefendantEyes =
-                                    defTablePart1.ChildNodes[5].ChildNodes[3].InnerText;
-                                caseSummary.DefendantSkin =
-                                    defTablePart1.ChildNodes[9].ChildNodes[3].InnerText;
-                                caseSummary.DefendantDob =
-                                    defTablePart1.ChildNodes[13].ChildNodes[3].InnerText.ToDateTimeNullable();
-                                caseSummary.DefendantUsCitizen =
-                                    defTablePart1.ChildNodes[17].ChildNodes[3].InnerText;
-
-                                var defTablePart2 = defDetailsTable.ChildNodes[3].ChildNodes[3].ChildNodes[1];
-                                caseSummary.DefendantHeightWeight =
-                                    defTablePart2.ChildNodes[1].ChildNodes[3].InnerText;
-                                caseSummary.DefendantHair =
-                                    defTablePart2.ChildNodes[5].ChildNodes[3].InnerText;
-                                caseSummary.DefendantBuild =
-                                    defTablePart2.ChildNodes[9].ChildNodes[3].InnerText;
-                                caseSummary.DefendantInCustody =
-                                    defTablePart2.ChildNodes[13].ChildNodes[3].InnerText;
-                                caseSummary.DefendantPlaceOfBirth =
-                                    defTablePart2.ChildNodes[17].ChildNodes[3].InnerText;
-
-                                caseSummary.DefendantAddress = defDetailsTable.ChildNodes[5].ChildNodes[3].InnerText;
-                                caseSummary.DefendantMarkings = defDetailsTable.ChildNodes[9].ChildNodes[3].InnerText;
-                            }
-
-                            // ****************************  CURRENT PRESIDING JUDGE ***********************
-                            var courtDetailsTable =
-                                htmlDoc.DocumentNode.SelectSingleNode("//table[@id='tblCourtDetails']");
-                            if (courtDetailsTable != null)
-                            {
-                                caseSummary.CpjCurrentCourt = courtDetailsTable.ChildNodes[3].ChildNodes[3].InnerText;
-                                caseSummary.CpjAddress = courtDetailsTable.ChildNodes[7].ChildNodes[3].InnerText;
-                                caseSummary.CpjJudgeName = courtDetailsTable.ChildNodes[11].ChildNodes[3].InnerText;
-                                caseSummary.CpjCourtType = courtDetailsTable.ChildNodes[15].ChildNodes[3].InnerText;
-                            }
-
-                            if (!isUpdate)
-                                context.CaseSummaries.Add(caseSummary);
-
-                            context.SaveChanges();
-
-                            // ***********************************   BONDS  ***********************************
-                            var bondsRows = htmlDoc.DocumentNode.SelectNodes
-                                ("//table[@id='tblBonds']/tr[@style='font-size:12px; ']");
-
-                            if (isUpdate)
-                            {
-                                var existingBonds = context.Bonds.Where(b => b.CaseId == caseSummary.Id).ToList();
-                                existingBonds.ForEach(b => context.Bonds.Remove(b));
-                            }
-
-                            if (bondsRows != null)
-                            {
-                                foreach (var bondsRow in bondsRows)
-                                {
-                                    var bond = new Bond();
-
-                                    bond.Date = DateTime.Parse(bondsRow.ChildNodes[1].InnerText);
-                                    bond.Type = bondsRow.ChildNodes[3].InnerText;
-                                    bond.Description = bondsRow.ChildNodes[5].InnerText;
-                                    bond.Snu = bondsRow.ChildNodes[7].InnerText;
-                                    bond.CaseId = caseSummary.Id;
-
-                                    context.Bonds.Add(bond);
-                                }
-                            }
-
-                            // ***********************************   ACTIVITIES  ***********************************
-                            var activitiesRows = htmlDoc.DocumentNode.SelectNodes(
-                                "//table[@id='tblActivities']/tr[@style='font-size:12px; ']");
-
-                            if (isUpdate)
-                            {
-                                var existingActivities =
-                                    context.Activities.Where(a => a.CaseId == caseSummary.Id).ToList();
-                                existingActivities.ForEach(a => context.Activities.Remove(a));
-                            }
-
-                            if (activitiesRows != null)
-                            {
-                                foreach (var activitiesRow in activitiesRows)
-                                {
-                                    var activity = new Activity();
-
-                                    activity.Date = DateTime.Parse(activitiesRow.ChildNodes[1].InnerText);
-                                    activity.Type = activitiesRow.ChildNodes[3].InnerText;
-                                    activity.Description = activitiesRow.ChildNodes[5].InnerText;
-                                    activity.SnuCfi = activitiesRow.ChildNodes[7].InnerText;
-                                    activity.CaseId = caseSummary.Id;
-
-                                    context.Activities.Add(activity);
-                                }
-                            }
-
-                            // ***********************************   BOOKINGS  ***********************************
-                            var bookingsRows = htmlDoc.DocumentNode.SelectNodes(
-                                "//table[@id='tblBookings']/tr[@style='font-size:12px; ']");
-
-                            if (isUpdate)
-                            {
-                                var existingBookings = context.Bookings.Where(b => b.CaseId == caseSummary.Id).ToList();
-                                existingBookings.ForEach(b => context.Bookings.Remove(b));
-                            }
-
-                            if (bookingsRows != null)
-                            {
-                                foreach (var bookingsRow in bookingsRows)
-                                {
-                                    var booking = new Booking();
-
-                                    booking.ArrestDate = bookingsRow.ChildNodes[1].InnerText.ToDateTimeNullable();
-                                    booking.ArrestLocation = bookingsRow.ChildNodes[3].InnerText;
-                                    booking.BookingDate = bookingsRow.ChildNodes[5].InnerText.ToDateTimeNullable();
-                                    booking.CaseId = caseSummary.Id;
-
-                                    context.Bookings.Add(booking);
-                                }
-                            }
-
-                            // ***********************************   HOLDS  ***********************************
-                            var holdsRows =
-                                htmlDoc.DocumentNode.SelectNodes("//table[@id='tblHolds']/tr[@style='font-size:12px; ']");
-
-                            if (isUpdate)
-                            {
-                                var existingHolds = context.Holds.Where(h => h.CaseId == caseSummary.Id).ToList();
-                                existingHolds.ForEach(h => context.Holds.Remove(h));
-                            }
-
-                            if (holdsRows != null)
-                            {
-                                foreach (var holdsRow in holdsRows)
-                                {
-                                    var hold = new Hold();
-
-                                    hold.AgencyPlacingHold = holdsRow.ChildNodes[1].InnerText;
-                                    hold.AgencyName = holdsRow.ChildNodes[3].InnerText;
-                                    hold.WarrantNumber = holdsRow.ChildNodes[5].InnerText;
-                                    hold.BondAmount = holdsRow.ChildNodes[7].InnerText;
-                                    hold.Offense = holdsRow.ChildNodes[9].InnerText;
-                                    hold.PlacedDate = holdsRow.ChildNodes[11].InnerText.ToDateTimeNullable();
-                                    hold.LiftedDate = holdsRow.ChildNodes[13].InnerText.ToDateTimeNullable();
-                                    hold.CaseId = caseSummary.Id;
-
-                                    context.Holds.Add(hold);
-                                }
-                            }
-
-                            // ***********************************   CRIMINAL HISTORY  ***********************************
-                            var crimHistRows = htmlDoc.DocumentNode.SelectNodes(
-                                "//table[@id='tblCrimHist']/tr[@style='font-size:11px; vertical-align:top; ']");
-
-                            if (isUpdate)
-                            {
-                                var existingHistories =
-                                    context.CriminalHistories.Where(h => h.CaseId == caseSummary.Id).ToList();
-                                existingHistories.ForEach(h => context.CriminalHistories.Remove(h));
-                            }
-
-                            if (crimHistRows != null)
-                            {
-                                foreach (var crimHistRow in crimHistRows)
-                                {
-                                    var criminalHistory = new CriminalHistory();
-
-                                    criminalHistory.CaseNumStatus = crimHistRow.ChildNodes[1].InnerText.Trim();
-                                    criminalHistory.Offense = crimHistRow.ChildNodes[3].InnerText.Trim();
-                                    criminalHistory.DateFiledBooked = crimHistRow.ChildNodes[5].InnerText.Trim();
-                                    criminalHistory.Court = crimHistRow.ChildNodes[7].InnerText.Trim();
-                                    criminalHistory.DefendantStatus = crimHistRow.ChildNodes[9].InnerText.Trim();
-                                    criminalHistory.Disposition = crimHistRow.ChildNodes[11].InnerText.Trim();
-                                    criminalHistory.BondAmount = crimHistRow.ChildNodes[13].InnerText.Trim();
-                                    criminalHistory.Offense = crimHistRow.ChildNodes[15].InnerText.Trim();
-                                    criminalHistory.NextSetting =
-                                        crimHistRow.ChildNodes[17].InnerText.Trim().ToDateTimeNullable();
-                                    criminalHistory.CaseId = caseSummary.Id;
-
-                                    context.CriminalHistories.Add(criminalHistory);
-                                }
-                            }
-
-                            // ***********************************   SETTINGS  ***********************************
-                            var settingsRows = htmlDoc.DocumentNode.SelectNodes(
-                                "//table[@id='tblSettings']/tr[@style='font-size:12px; ']");
-
-                            if (isUpdate)
-                            {
-                                var existingSettings = context.Settings.Where(s => s.CaseId == caseSummary.Id).ToList();
-                                existingSettings.ForEach(s => context.Settings.Remove(s));
-                            }
-
-                            if (settingsRows != null)
-                            {
-                                foreach (var settingsRow in settingsRows)
-                                {
-                                    var setting = new Setting();
-
-                                    setting.Date = DateTime.Parse(settingsRow.ChildNodes[1].InnerText.Trim());
-                                    setting.Court = settingsRow.ChildNodes[3].InnerText.Trim();
-                                    setting.PostJdgm = settingsRow.ChildNodes[5].InnerText.Trim();
-                                    setting.DocketType = settingsRow.ChildNodes[7].InnerText.Trim();
-                                    setting.Reason = settingsRow.ChildNodes[9].InnerText.Trim();
-                                    setting.Results = settingsRow.ChildNodes[11].InnerText.Trim();
-                                    setting.Defendant = settingsRow.ChildNodes[13].InnerText.Trim();
-                                    setting.FutureDate =
-                                        settingsRow.ChildNodes[15].InnerText.Trim().ToDateTimeNullable();
-                                    setting.Comments = settingsRow.ChildNodes[17].InnerText.Trim();
-                                    setting.AttorneyAppearanceIndicator = settingsRow.ChildNodes[19].InnerText.Trim();
-                                    setting.CaseId = caseSummary.Id;
-
-                                    context.Settings.Add(setting);
-
-                                }
-                            }
-
-                            context.SaveChanges();
-                        }
-                    }
-
-                }
-            }
-            catch (Exception e)
-            {
-                var error = "Error processing row. " + e.Message;
-                Log(error);
-                Trace.TraceError(error + e.StackTrace);
-                File.WriteAllText($"{DateTime.Now.Hour}-{DateTime.Now.Minute}-{DateTime.Now.Second}.htm", row.InnerHtml);
-            }
-            return false;
-        }
-
-        private string Search(HtmlDocument htmlDoc)
-        {
-            var eventTarget =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTTARGET']")?.GetAttributeValue("value", "");
-
-            var eventArgument =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTARGUMENT']")?.GetAttributeValue("value", "");
-            var viewState =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']")?.GetAttributeValue("value", "");
-            var viewStateGenerator =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']")?.GetAttributeValue("value", "");
-            var viewStateEncrypted =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEENCRYPTED']")?.GetAttributeValue("value", "");
-            var eventValidation =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']")?.GetAttributeValue("value", "");
-
-            var url = ConfigurationManager.AppSettings["Url"];
-
-            var values = new NameValueCollection()
-            {
-                {"ctl00_ctl00_ctl00_ContentPlaceHolder1_ContentPlaceHolder2_ContentPlaceHolder2_tabSearch_ClientState", "{\"ActiveTabIndex\":1,\"TabState\":[true,true,true,true,true,true,true,true]}"},
-                {"__EVENTTARGET", eventTarget},
-                {"__EVENTARGUMENT", eventArgument},
-                {"__LASTFOCUS", ""},
-                {"__VIEWSTATE", viewState},
-                {"__VIEWSTATEGENERATOR", viewStateGenerator},
-                {"__VIEWSTATEENCRYPTED", viewStateEncrypted},
-                {"__EVENTVALIDATION", eventValidation}
-            };
-
-            AddSearchFormValues(values);
-
-            _client.Headers[HttpRequestHeader.ContentType] = "application/x-www-form-urlencoded";
-            _client.Headers[HttpRequestHeader.Host] = "www.hcdistrictclerk.com";
-            _client.Headers[HttpRequestHeader.Cookie] = _cookie;
-
-            var result = Encoding.ASCII.GetString(_client.UploadValues(url, values));
-            return result;
-        }
-
-        private string GetNextResultsPage(HtmlDocument htmlDoc, int page)
-        {
-            var eventTarget = "ctl00$ctl00$ctl00$ContentPlaceHolder1$ContentPlaceHolder2$ContentPlaceHolder2$pager1";
-            var eventArgument = page.ToString();
-
-            var viewState =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']").GetAttributeValue("value", "");
-            var viewStateGenerator =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']").GetAttributeValue("value", "");
-            var viewStateEncrypted =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEENCRYPTED']").GetAttributeValue("value", "");
-            var eventValidation =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']").GetAttributeValue("value", "");
-
-            var url = ConfigurationManager.AppSettings["Url"];
-
-            var values = new NameValueCollection()
-            {
-                {"__EVENTTARGET", eventTarget},
-                {"__EVENTARGUMENT", eventArgument},
-                {"__VIEWSTATE", viewState},
-                {"__VIEWSTATEGENERATOR", viewStateGenerator},
-                {"__VIEWSTATEENCRYPTED", viewStateEncrypted},
-                {"__EVENTVALIDATION", eventValidation}
-            };
-
-            AddNextPageFormValues(values);
-
-            //_client.Headers.Add(HttpRequestHeader.Connection,"keep-alive");
-            _client.Headers[HttpRequestHeader.ContentType] = "application/x-www-form-urlencoded";
-            _client.Headers[HttpRequestHeader.Host] = "www.hcdistrictclerk.com";
-            _client.Headers[HttpRequestHeader.Cookie] = _cookie;
-
-            var result = Encoding.ASCII.GetString(_client.UploadValues(url, values));
-            return result;
-        }
-
-
-        private void AddSearchFormValues(NameValueCollection values)
-        {
-            // insert license #
-            var formattedPairs = string.Format(searchFormValues, tbBondsman.Text);
-            // insert required search form values
-            var pairs = formattedPairs.Split('&');
-            foreach (var pair in pairs)
-            {
-                try
-                {
-                    var key = pair.Split('=')[0];
-                    var value = pair.Split('=')[1];
-                    values.Add(key, value);
-                }
-                catch (Exception e)
-                {
-                    Trace.TraceError(e.Message + e.StackTrace);
-                }
-            }
-        }
-
-        private void AddNextPageFormValues(NameValueCollection values)
-        {
-            // insert required form values to get the next page
-            var pairs = nextPageFormValues.Split('&');
-            foreach (var pair in pairs)
-            {
-                try
-                {
-                    var key = pair.Split('=')[0];
-                    var value = pair.Split('=')[1];
-                    values.Add(key, value);
-                }
-                catch (Exception e)
-                {
-                    Trace.TraceError(e.Message + e.StackTrace);
-                }
-            }
-        }
-
-        private bool Login(HtmlDocument htmlDoc, string loginUrl)
-        {
-            var eventTarget =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTTARGET']").GetAttributeValue("value", "");
-
-            var eventArgument =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTARGUMENT']").GetAttributeValue("value", "");
-            var viewState =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATE']").GetAttributeValue("value", "");
-            var viewStateGenerator =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__VIEWSTATEGENERATOR']").GetAttributeValue("value", "");
-            var eventValidation =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']").GetAttributeValue("value", "");
-            var btnLoginValue =
-                htmlDoc.DocumentNode.SelectSingleNode("//input[@name='btnLoginImageButton']").GetAttributeValue("value", "");
-
-            var values = new NameValueCollection()
-            {
-                {"__EVENTTARGET", eventTarget},
-                {"__EVENTARGUMENT", eventArgument},
-                {"__VIEWSTATE", viewState},
-                {"__VIEWSTATEGENERATOR", viewStateGenerator},
-                {"__EVENTVALIDATION", eventValidation},
-                {"txtUserName", tbUsername.Text},
-                {"txtPassword", tbPassword.Text},
-                {"btnLoginImageButton", btnLoginValue}
-            };
-
-            _client.Headers.Add(HttpRequestHeader.ContentType, "application/x-www-form-urlencoded");
-            _client.Headers.Add(HttpRequestHeader.Host, "www.hcdistrictclerk.com");
-            _client.Headers.Add("DNT", "1");
-            _client.Headers.Add(HttpRequestHeader.Referer, loginUrl);
-            _client.Headers.Add("Upgrade-Insecure-Requests", "1");
-            _client.Headers.Add(HttpRequestHeader.UserAgent, "Mozilla/5.0 (Windows NT 6.3; Win64; x64; rv:60.0) Gecko/20100101 Firefox/60.0");
-            _client.Headers.Add(HttpRequestHeader.KeepAlive,"");
-            _client.Headers.Add(HttpRequestHeader.Accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            _client.Headers.Add(HttpRequestHeader.AcceptEncoding, "gzip, deflate, br");
-            _client.Headers.Add(HttpRequestHeader.AcceptLanguage, "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3");
-            
-            _client.UploadValues(loginUrl, values);
-            _cookie = _client.ResponseHeaders["Set-Cookie"];
-
-            // if login is successful, cookie length should be more than 500 symbols
-            return _cookie.Length > 500;
-        }
-
-        private void btnStop_Click(object sender, EventArgs e)
-        {
-            _started = false;
-            btnStop.Enabled = false;
-            Log("Stopping...");
-        }
-
-        private void Stop()
-        {
-            btnStop.Enabled = false;
-            btnStart.Enabled = true;
-            tbBondsman.Enabled = true;
-            tbUsername.Enabled = true;
-            tbPassword.Enabled = true;
-
-            Log("Stopped");
-        }
-
-        private void Log(string message)
-        {
-            BeginInvoke(new Action(() =>
-            {
-                tbLog.AppendText($"{DateTime.Now:HH:mm:ss}: {message}\r\n");
-                tbLog.ScrollToCaret();
-            }));
-
-            if (tbLog.Lines.Length > 100)
-            {
-                var file = Path.Combine(Application.StartupPath, $"{DateTime.Now:yyyy-MM-dd_HH-mm} .log");
-                File.WriteAllText(file, tbLog.Text);
-
-                BeginInvoke(new Action(() => tbLog.Text = string.Empty));
-                Log("Log flushed. All data saved to " + file);
-            }
-        }
-
-
         string searchFormValues =
             "ctl00$ctl00$ctl00$ContentPlaceHolder1$ContentPlaceHolder2$ContentPlaceHolder2$HfCaseNbr=&ctl00$ctl00$ctl00$ContentPlaceHolder1$ContentPlaceHolder2$ContentPlaceHolder2$HfCaseCdi=" +
             "&ctl00$ctl00$ctl00$ContentPlaceHolder1$ContentPlaceHolder2$ContentPlaceHolder2$tabSearch$tabCivil$txtCaseNumber=&ctl00$ctl00$ctl00$ContentPlaceHolder1$ContentPlaceHolder2$ContentPlaceHolder2$tabSearch$tabCivil$ddlPlaintiffSearchType=" +
@@ -1087,6 +1165,7 @@ namespace BondsmenScrapper
             "&ctl00$ctl00$ctl00$ContentPlaceHolder1$ContentPlaceHolder2$ContentPlaceHolder2$txtMPETDL=";
     }
 
+    // Custom web client with GZIP support
     public class GZipWebClient : WebClient
     {
         protected override WebRequest GetWebRequest(Uri address)

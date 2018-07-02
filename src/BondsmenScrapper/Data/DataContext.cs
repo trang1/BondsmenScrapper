@@ -77,7 +77,7 @@ namespace BondsmenScrapper.Data
     {
         public int Id { get; set; }
         public int CaseId { get; set; }
-        public DateTime Date { get; set; }
+        public DateTime? Date { get; set; }
         public string Type { get; set; }
         public string Description { get; set; }
         public string SnuCfi { get; set; }
