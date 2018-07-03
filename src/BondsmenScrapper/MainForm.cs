@@ -44,6 +44,24 @@ namespace BondsmenScrapper
 
         private void btnStart_Click(object sender, EventArgs e)
         {
+            if (string.IsNullOrEmpty(tbUsername.Text))
+            {
+                MessageBox.Show("Please enter username.");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(tbPassword.Text))
+            {
+                MessageBox.Show("Please enter password.");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(tbBondsman.Text))
+            {
+                MessageBox.Show("Please enter bondsman license number.");
+                return;
+            }
+
             btnStop.Enabled = true;
             btnStart.Enabled = false;
 
