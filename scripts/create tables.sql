@@ -1,4 +1,4 @@
-CREATE TABLE bondsmen.casesummaries(
+CREATE TABLE bondsmen.CaseSummaries(
   CaseNumber VARCHAR (64) NOT NULL,
   FileDate DATE NOT NULL,
   CaseStatus VARCHAR (64) DEFAULT NULL,
@@ -34,7 +34,7 @@ AUTO_INCREMENT = 20
 CHARACTER SET utf8
 COLLATE utf8_general_ci;
 
-CREATE TABLE bondsmen.activities(
+CREATE TABLE bondsmen.Activities(
   CaseId INT (11) NOT NULL,
   `Date` DATE DEFAULT NULL,
   Type VARCHAR (64) NOT NULL,
@@ -51,7 +51,7 @@ AUTO_INCREMENT = 46
 CHARACTER SET utf8
 COLLATE utf8_general_ci;
 
-CREATE TABLE bondsmen.bonds(
+CREATE TABLE bondsmen.Bonds(
   CaseId INT (11) NOT NULL,
   `Date` DATE NOT NULL,
   Type VARCHAR (64) NOT NULL,
@@ -68,7 +68,7 @@ AUTO_INCREMENT = 17
 CHARACTER SET utf8
 COLLATE utf8_general_ci;
 
-CREATE TABLE bondsmen.bookings(
+CREATE TABLE bondsmen.Bookings(
   CaseId INT (11) NOT NULL,
   ArrestDate DATETIME DEFAULT NULL,
   ArrestLocation VARCHAR (64) DEFAULT NULL,
@@ -84,7 +84,7 @@ AUTO_INCREMENT = 7
 CHARACTER SET utf8
 COLLATE utf8_general_ci;
 
-CREATE TABLE bondsmen.criminalhistories(
+CREATE TABLE bondsmen.CriminalHistories(
   CaseId INT (11) NOT NULL,
   CaseNumStatus VARCHAR (128) NOT NULL,
   Defendant VARCHAR (128) DEFAULT NULL,
@@ -106,7 +106,7 @@ AUTO_INCREMENT = 3
 CHARACTER SET utf8
 COLLATE utf8_general_ci;
 
-CREATE TABLE bondsmen.holds(
+CREATE TABLE bondsmen.Holds(
   CaseId INT (11) DEFAULT NULL,
   AgencyPlacingHold VARCHAR (64) DEFAULT NULL,
   AgencyName VARCHAR (64) DEFAULT NULL,
@@ -126,7 +126,7 @@ AUTO_INCREMENT = 1
 CHARACTER SET utf8
 COLLATE utf8_general_ci;
 
-CREATE TABLE bondsmen.settings(
+CREATE TABLE bondsmen.Settings(
   CaseId INT (11) NOT NULL,
   `Date` DATETIME NOT NULL,
   Court VARCHAR (16) DEFAULT NULL,

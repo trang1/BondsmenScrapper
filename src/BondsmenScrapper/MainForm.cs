@@ -644,7 +644,7 @@ namespace BondsmenScrapper
             var eventValidation =
                 htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']")?.GetAttributeValue("value", "");
 
-            var url = ConfigurationManager.AppSettings["Url"];
+            var url = ConfigurationManager.AppSettings["SearchUrl"];
 
             var values = new NameValueCollection()
             {
@@ -688,7 +688,7 @@ namespace BondsmenScrapper
             var eventValidation =
                 htmlDoc.DocumentNode.SelectSingleNode("//input[@name='__EVENTVALIDATION']").GetAttributeValue("value", "");
 
-            var url = ConfigurationManager.AppSettings["Url"];
+            var url = ConfigurationManager.AppSettings["SearchUrl"];
 
             var values = new NameValueCollection()
             {
